@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, SearchX } from "lucide-react";
 import type { FunnelStage, Opportunity } from "../types";
-import { BRL } from "../utils/metrics";
+import { sumFees } from "../utils/metrics";
+import { formatMoney, opportunityCurrency, opportunityFee } from "../utils/money";
 import { OpportunityCard } from "./OpportunityCard";
 
 interface FunnelBoardProps {
@@ -18,7 +19,9 @@ export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove }: Fu
   const currentPage = Math.min(page, pageCount);
   const firstIndex = (currentPage - 1) * pageSize;
   const pageOpportunities = opportunities.slice(firstIndex, firstIndex + pageSize);
-  const totalValue = opportunities.reduce((total, opportunity) => total + opportunity.value, 0);
+  const currencies = [...new Set(opportunities.map(opportunityCurrency))];
+  const totals = currencies.map((currency) => `${formatMoney(sumFees(opportunities.filter((opportunity) => opportunityCurrency(opportunity) === currency)), currency)} em fee`).join(" · ");
+  const missingFeeCount = opportunities.filter((opportunity) => opportunityFee(opportunity) === null).length;
 
   return (
     <main className="mx-auto max-w-[1800px] px-4 py-5 sm:px-6">
@@ -26,7 +29,8 @@ export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove }: Fu
         <div>
           <h2 className="text-lg font-bold text-slate-950">{selectedStage || "Todas as oportunidades"}</h2>
           <p className="mt-1 text-sm text-slate-500" aria-live="polite">
-            {opportunities.length} oportunidades · {BRL.format(totalValue)} nos resultados
+            {opportunities.length} oportunidades{totals ? ` · ${totals}` : ""} nos resultados
+            {missingFeeCount > 0 ? ` · ${missingFeeCount} sem fee informado` : ""}
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-600">

@@ -8,6 +8,7 @@ import {
   LEGACY_SELLER_MAP,
 } from "../constants";
 import { mockOpportunities } from "../data/mockData";
+import { validateQuotation } from "../utils/money";
 import type { ClientDraft, ClientOption, CurrentUser, FunnelStage, OfficialSalesSegment, Opportunity, OpportunityHistory, OptionLists, SalesSegment, UserRole } from "../types";
 
 const STORAGE_KEY = "crm-kanban-opportunities";
@@ -90,6 +91,7 @@ export async function persistOpportunities(opportunities: Opportunity[]) {
 }
 
 export async function upsertOpportunity(opportunity: Opportunity) {
+  validateQuotation(opportunity.value, opportunity.fee ?? null);
   if (!isSupabaseConfigured) {
     return;
   }
@@ -346,7 +348,8 @@ async function supabaseRequest<T>(path: string, init: RequestInit = {}): Promise
     return undefined as T;
   }
 
-  return response.json();
+  const body = await response.text();
+  return body ? JSON.parse(body) as T : undefined as T;
 }
 
 async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -415,6 +418,8 @@ interface SupabaseOpportunity {
   service?: string;
   seller: string;
   value: number;
+  currency?: Opportunity["currency"];
+  fee?: number | null;
   entered_at: string;
   last_interaction_at: string;
   next_step: string;
@@ -495,6 +500,8 @@ function fromSupabase(row: SupabaseOpportunity): Opportunity {
     service: row.service || "Não informado",
     seller: row.seller,
     value: Number(row.value),
+    currency: row.currency ?? "BRL",
+    fee: row.fee == null ? null : Number(row.fee),
     enteredAt: row.entered_at,
     lastInteractionAt: row.last_interaction_at,
     nextStep: row.next_step,
@@ -556,6 +563,8 @@ function toSupabase(opportunity: Opportunity): SupabaseOpportunity {
     service: opportunity.service,
     seller: opportunity.seller,
     value: opportunity.value,
+    currency: opportunity.currency ?? "BRL",
+    fee: opportunity.fee ?? null,
     entered_at: opportunity.enteredAt,
     last_interaction_at: opportunity.lastInteractionAt,
     next_step: opportunity.nextStep,

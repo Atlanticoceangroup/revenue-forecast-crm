@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { BUSINESS_UNITS } from "../constants";
 import { loadOpportunityHistory } from "../services/opportunityRepository";
 import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, OfficialSalesSegment, Opportunity, OpportunityHistory, OptionLists } from "../types";
-import { BRL, stalledDays } from "../utils/metrics";
+import { stalledDays } from "../utils/metrics";
+import { formatMoney, opportunityCurrency, opportunityFee } from "../utils/money";
+import type { Currency } from "../types";
 import { AddOpportunityForm } from "./AddOpportunityForm";
 
 interface OpportunityModalProps {
@@ -20,6 +22,7 @@ interface OpportunityModalProps {
   currentUser: CurrentUser;
   selectedBusinessUnit: BusinessUnit;
   canEdit: boolean;
+  defaultCurrency?: Currency;
 }
 
 export function OpportunityModal({
@@ -36,6 +39,7 @@ export function OpportunityModal({
   currentUser,
   selectedBusinessUnit,
   canEdit,
+  defaultCurrency,
 }: OpportunityModalProps) {
   const [history, setHistory] = useState<OpportunityHistory[]>([]);
   const isClosed = opportunity?.stage.startsWith("Fechado") ?? false;
@@ -72,7 +76,11 @@ export function OpportunityModal({
             <div className="rounded-lg bg-slate-950 p-4 text-white">
               <p className="text-sm text-white/70">{opportunity.opportunityName}</p>
               <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
-                <strong className="text-3xl">{BRL.format(opportunity.value)}</strong>
+                <div>
+                  <p className="text-xs text-white/70">Receita Atlantic (fee)</p>
+                  <strong className="text-3xl">{opportunityFee(opportunity) === null ? "Não informado" : formatMoney(opportunityFee(opportunity)!, opportunityCurrency(opportunity))}</strong>
+                  <p className="mt-2 text-sm text-white/80">Bruto: {formatMoney(opportunity.value, opportunityCurrency(opportunity))}</p>
+                </div>
                 <span className="rounded-full bg-white/10 px-3 py-1 text-sm font-bold">{opportunity.probability}% forecast</span>
               </div>
             </div>
@@ -158,6 +166,7 @@ export function OpportunityModal({
             onDeleteOption={onDeleteOption}
             currentUser={currentUser}
             selectedBusinessUnit={selectedBusinessUnit}
+            defaultCurrency={defaultCurrency}
           />
         )}
       </aside>

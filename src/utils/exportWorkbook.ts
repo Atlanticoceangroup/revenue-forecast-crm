@@ -1,12 +1,14 @@
 import { BUSINESS_UNITS, FUNNEL_STAGES } from "../constants";
-import type { BusinessUnit, Opportunity } from "../types";
-import { calculateMetrics, calculateMonthlyMetrics, daysBetween } from "./metrics";
+import type { BusinessUnit, Currency, Opportunity } from "../types";
+import { calculateMetrics, calculateMonthlyMetrics, daysBetween, sumFees } from "./metrics";
+import { opportunityCurrency, opportunityFee } from "./money";
 
 interface WorkbookExportOptions {
   opportunities: Opportunity[];
   businessUnit: BusinessUnit;
   selectedMonth: string;
   generatedBy: string;
+  currency?: Currency;
 }
 
 interface WorkbookCell {
@@ -47,8 +49,9 @@ const STYLE = {
   totalCurrency: 19,
 } as const;
 
-export async function exportOpportunitiesWorkbook({ opportunities, businessUnit, selectedMonth, generatedBy }: WorkbookExportOptions) {
-  const bytes = await buildOpportunitiesWorkbook({ opportunities, businessUnit, selectedMonth, generatedBy });
+export async function exportOpportunitiesWorkbook(options: WorkbookExportOptions) {
+  const { businessUnit } = options;
+  const bytes = await buildOpportunitiesWorkbook(options);
   const blob = new Blob([bytes], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
@@ -60,10 +63,14 @@ export async function exportOpportunitiesWorkbook({ opportunities, businessUnit,
   URL.revokeObjectURL(url);
 }
 
-export async function buildOpportunitiesWorkbook({ opportunities, businessUnit, selectedMonth, generatedBy }: WorkbookExportOptions) {
+export async function buildOpportunitiesWorkbook({ opportunities, businessUnit, selectedMonth, generatedBy, currency: selectedCurrency }: WorkbookExportOptions) {
+  const currency = selectedCurrency ?? (opportunities[0] ? opportunityCurrency(opportunities[0]) : "BRL");
+  if (opportunities.some((opportunity) => opportunityCurrency(opportunity) !== currency)) {
+    throw new Error("Selecione uma única moeda antes de exportar a planilha.");
+  }
   const { strToU8, zipSync } = await import("fflate");
   const sheets = [
-    createSummarySheet(opportunities, businessUnit, selectedMonth, generatedBy),
+    createSummarySheet(opportunities, businessUnit, selectedMonth, generatedBy, currency),
     createOpportunitiesSheet(opportunities),
     createSellersSheet(opportunities),
   ];
@@ -74,7 +81,7 @@ export async function buildOpportunitiesWorkbook({ opportunities, businessUnit, 
     "docProps/core.xml": strToU8(corePropertiesXml()),
     "xl/workbook.xml": strToU8(workbookXml(sheets)),
     "xl/_rels/workbook.xml.rels": strToU8(workbookRelationshipsXml(sheets.length)),
-    "xl/styles.xml": strToU8(stylesXml()),
+    "xl/styles.xml": strToU8(stylesXml(currency)),
   };
 
   sheets.forEach((sheet, index) => {
@@ -89,29 +96,30 @@ function createSummarySheet(
   businessUnit: BusinessUnit,
   selectedMonth: string,
   generatedBy: string,
+  currency: Currency,
 ): WorksheetDefinition {
-  const metrics = calculateMetrics(opportunities);
-  const monthly = calculateMonthlyMetrics(opportunities, selectedMonth);
+  const metrics = calculateMetrics(opportunities, currency);
+  const monthly = calculateMonthlyMetrics(opportunities, selectedMonth, currency);
   const businessUnitName = BUSINESS_UNITS.find((unit) => unit.id === businessUnit)?.label ?? businessUnit;
   const rows: WorkbookCell[][] = [
     [cell("Relatório comercial detalhado", STYLE.title)],
     [cell(businessUnitName, STYLE.subtitle)],
     [cell("Período selecionado", STYLE.label), cell(monthLabel(selectedMonth)), empty(), cell("Gerado por", STYLE.label), cell(generatedBy)],
     [cell("Gerado em", STYLE.label), cell(excelDateTimeSerial(new Date()), STYLE.dateTime), empty(), cell("Oportunidades", STYLE.label), cell(opportunities.length, STYLE.integer)],
-    [],
+    [cell(`Moeda: ${currency}. Receita Atlantic = fee. Valores sem conversão cambial.`, STYLE.subtitle)],
     [
-      cell("Pipeline aberto", STYLE.label), cell(metrics.openRevenue, STYLE.kpiCurrency),
-      cell("Forecast ponderado", STYLE.label), cell(metrics.weightedForecast, STYLE.kpiCurrency),
-      cell("Receita ganha no mês", STYLE.label), cell(monthly.wonRevenue, STYLE.kpiCurrency),
+      cell("Fee em aberto", STYLE.label), cell(metrics.openRevenue, STYLE.kpiCurrency),
+      cell("Forecast do fee", STYLE.label), cell(metrics.weightedForecast, STYLE.kpiCurrency),
+      cell("Fee ganho no mês", STYLE.label), cell(monthly.wonRevenue, STYLE.kpiCurrency),
     ],
     [
       cell("Win rate no mês", STYLE.label), cell(monthly.winRate, STYLE.kpiPercent),
       cell("Oportunidades sem ação", STYLE.label), cell(metrics.withoutNextAction, STYLE.kpiInteger),
       cell("Paradas há mais de 7 dias", STYLE.label), cell(metrics.stalledOverSeven, STYLE.kpiInteger),
     ],
-    [],
+    [cell(metrics.missingFeeCount ? `Receita parcial: ${metrics.missingFeeCount} oportunidades sem fee informado.` : "Todos os fees informados. Totais referentes aos dados exportados.", STYLE.subtitle)],
     [cell("Funil por etapa", STYLE.section)],
-    [cell("Etapa", STYLE.header), cell("Quantidade", STYLE.header), cell("Valor total", STYLE.header), cell("Valor ponderado", STYLE.header)],
+    [cell("Etapa", STYLE.header), cell("Quantidade", STYLE.header), cell("Bruto das cotações", STYLE.header), cell("Fee Atlantic", STYLE.header), cell("Forecast do fee", STYLE.header)],
   ];
 
   for (const stage of FUNNEL_STAGES) {
@@ -120,24 +128,26 @@ function createSummarySheet(
       cell(stage),
       cell(stageOpportunities.length, STYLE.integer),
       cell(sum(stageOpportunities, (opportunity) => opportunity.value), STYLE.currency),
-      cell(sum(stageOpportunities, (opportunity) => opportunity.value * (opportunity.probability / 100)), STYLE.currency),
+      cell(sumFees(stageOpportunities), STYLE.currency),
+      cell(sum(stageOpportunities.filter((opportunity) => !opportunity.stage.startsWith("Fechado")), (opportunity) => (opportunityFee(opportunity) ?? 0) * (opportunity.probability / 100)), STYLE.currency),
     ]);
   }
   rows.push([
     cell("Total", STYLE.header),
     cell(opportunities.length, STYLE.totalInteger),
     cell(sum(opportunities, (opportunity) => opportunity.value), STYLE.totalCurrency),
-    cell(sum(opportunities, (opportunity) => opportunity.value * (opportunity.probability / 100)), STYLE.totalCurrency),
+    cell(sumFees(opportunities), STYLE.totalCurrency),
+    cell(metrics.weightedForecast, STYLE.totalCurrency),
   ]);
 
-  return { name: "Resumo", rows, widths: [32, 18, 22, 20, 26, 20], merges: ["A1:F1", "A2:F2", "A9:F9"] };
+  return { name: "Resumo", rows, widths: [32, 20, 24, 24, 28, 24], merges: ["A1:F1", "A2:F2", "A5:F5", "A8:F8", "A9:F9"] };
 }
 
 function createOpportunitiesSheet(opportunities: Opportunity[]): WorksheetDefinition {
   const headers = [
-    "Base operacional", "Cliente", "Oportunidade", "Segmento", "Serviço", "Vendedor", "Valor", "Valor ponderado",
+    "Base operacional", "Cliente", "Oportunidade", "Segmento", "Serviço", "Vendedor", "Bruto da cotação", "Forecast do fee aberto",
     "Entrada no funil", "Última interação", "Próximo passo", "Data da próxima ação", "Dias sem interação", "Status da ação",
-    "Probabilidade", "Origem", "Tipo de lead", "Etapa", "Prioridade", "Temperatura", "Motivo da perda", "Data de fechamento",
+    "Probabilidade", "Origem", "Tipo de lead", "Etapa", "Prioridade", "Temperatura", "Motivo da perda", "Data de fechamento", "Moeda", "Fee Atlantic", "Fee informado",
   ];
   const rows: WorkbookCell[][] = [headers.map((header) => cell(header, STYLE.header))];
 
@@ -146,27 +156,28 @@ function createOpportunitiesSheet(opportunities: Opportunity[]): WorksheetDefini
     rows.push([
       cell(businessUnitLabel(opportunity.businessUnit)), cell(opportunity.clientName), cell(opportunity.opportunityName),
       cell(opportunity.segment), cell(opportunity.service), cell(opportunity.seller), cell(opportunity.value, STYLE.currency),
-      cell(opportunity.value * (opportunity.probability / 100), STYLE.currency), cell(excelDateSerial(opportunity.enteredAt), STYLE.date),
+      cell(opportunityFee(opportunity) === null ? null : opportunity.stage.startsWith("Fechado") ? 0 : opportunityFee(opportunity)! * (opportunity.probability / 100), STYLE.currency), cell(excelDateSerial(opportunity.enteredAt), STYLE.date),
       cell(excelDateSerial(opportunity.lastInteractionAt), STYLE.date), cell(opportunity.nextStep, STYLE.wrapped),
       cell(excelDateSerial(opportunity.nextActionDate), STYLE.date), cell(daysBetween(opportunity.lastInteractionAt), STYLE.integer),
       cell(actionStatus, statusStyle(actionStatus)), cell(opportunity.probability / 100, STYLE.percent), cell(opportunity.source),
       cell(opportunity.leadType), cell(opportunity.stage, stageStyle(opportunity.stage)), cell(opportunity.priority),
       cell(opportunity.temperature), cell(opportunity.lossReason ?? ""), cell(excelDateSerial(opportunity.closedAt), STYLE.date),
+      cell(opportunityCurrency(opportunity)), cell(opportunityFee(opportunity), STYLE.currency), cell(opportunityFee(opportunity) === null ? "Não" : "Sim"),
     ]);
   });
 
   return {
     name: "Oportunidades",
     rows,
-    widths: [28, 28, 32, 24, 28, 24, 16, 18, 17, 17, 42, 20, 20, 18, 16, 16, 16, 28, 14, 14, 20, 20],
+    widths: [28, 28, 32, 24, 28, 24, 20, 24, 17, 17, 42, 20, 20, 18, 16, 16, 16, 28, 14, 14, 20, 20, 12, 20, 18],
     freezeRows: 1,
     freezeColumns: 2,
-    autoFilter: `A1:V${Math.max(rows.length, 1)}`,
+    autoFilter: `A1:Y${Math.max(rows.length, 1)}`,
   };
 }
 
 function createSellersSheet(opportunities: Opportunity[]): WorksheetDefinition {
-  const headers = ["Vendedor", "Abertas", "Ganhas", "Perdidas", "Pipeline aberto", "Forecast ponderado", "Receita ganha", "Win rate"];
+  const headers = ["Vendedor", "Abertas", "Ganhas", "Perdidas", "Fee em aberto", "Forecast do fee", "Fee ganho", "Win rate", "Sem fee informado"];
   const rows: WorkbookCell[][] = [headers.map((header) => cell(header, STYLE.header))];
   const sellers = [...new Set(opportunities.map((opportunity) => opportunity.seller))].sort((a, b) => a.localeCompare(b, "pt-BR"));
 
@@ -178,10 +189,11 @@ function createSellersSheet(opportunities: Opportunity[]): WorksheetDefinition {
     const closedCount = won.length + lost.length;
     rows.push([
       cell(seller), cell(open.length, STYLE.integer), cell(won.length, STYLE.integer), cell(lost.length, STYLE.integer),
-      cell(sum(open, (opportunity) => opportunity.value), STYLE.currency),
-      cell(sum(open, (opportunity) => opportunity.value * (opportunity.probability / 100)), STYLE.currency),
-      cell(sum(won, (opportunity) => opportunity.value), STYLE.currency),
+      cell(sumFees(open), STYLE.currency),
+      cell(sum(open, (opportunity) => (opportunityFee(opportunity) ?? 0) * (opportunity.probability / 100)), STYLE.currency),
+      cell(sumFees(won), STYLE.currency),
       cell(closedCount ? won.length / closedCount : 0, STYLE.percent),
+      cell(sellerOpportunities.filter((opportunity) => opportunityFee(opportunity) === null).length, STYLE.integer),
     ]);
   });
   rows.push([
@@ -189,18 +201,19 @@ function createSellersSheet(opportunities: Opportunity[]): WorksheetDefinition {
     cell(rows.slice(1).reduce((total, row) => total + Number(row[1]?.value ?? 0), 0), STYLE.totalInteger),
     cell(rows.slice(1).reduce((total, row) => total + Number(row[2]?.value ?? 0), 0), STYLE.totalInteger),
     cell(rows.slice(1).reduce((total, row) => total + Number(row[3]?.value ?? 0), 0), STYLE.totalInteger),
-    cell(sum(opportunities.filter((opportunity) => !opportunity.stage.startsWith("Fechado")), (opportunity) => opportunity.value), STYLE.totalCurrency),
-    cell(sum(opportunities.filter((opportunity) => !opportunity.stage.startsWith("Fechado")), (opportunity) => opportunity.value * (opportunity.probability / 100)), STYLE.totalCurrency),
-    cell(sum(opportunities.filter((opportunity) => opportunity.stage === "Fechado - Ganhou"), (opportunity) => opportunity.value), STYLE.totalCurrency),
+    cell(sumFees(opportunities.filter((opportunity) => !opportunity.stage.startsWith("Fechado"))), STYLE.totalCurrency),
+    cell(sum(opportunities.filter((opportunity) => !opportunity.stage.startsWith("Fechado")), (opportunity) => (opportunityFee(opportunity) ?? 0) * (opportunity.probability / 100)), STYLE.totalCurrency),
+    cell(sumFees(opportunities.filter((opportunity) => opportunity.stage === "Fechado - Ganhou")), STYLE.totalCurrency),
     cell("", STYLE.header),
+    cell(opportunities.filter((opportunity) => opportunityFee(opportunity) === null).length, STYLE.totalInteger),
   ]);
 
   return {
     name: "Vendedores",
     rows,
-    widths: [28, 14, 14, 14, 20, 22, 20, 16],
+    widths: [28, 14, 14, 14, 20, 22, 20, 16, 20],
     freezeRows: 1,
-    autoFilter: `A1:H${Math.max(rows.length - 1, 1)}`,
+    autoFilter: `A1:I${Math.max(rows.length - 1, 1)}`,
   };
 }
 
@@ -301,10 +314,10 @@ function appPropertiesXml(sheets: WorksheetDefinition[]) {
   );
 }
 
-function stylesXml() {
+function stylesXml(currency: Currency) {
   return xmlHeader(
     `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<numFmts count="3"><numFmt numFmtId="164" formatCode="R$ #,##0.00"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/><numFmt numFmtId="166" formatCode="dd/mm/yyyy hh:mm"/></numFmts>` +
+    `<numFmts count="3"><numFmt numFmtId="164" formatCode="&quot;${currency}&quot; #,##0.00"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/><numFmt numFmtId="166" formatCode="dd/mm/yyyy hh:mm"/></numFmts>` +
     `<fonts count="7"><font><sz val="10"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><b/><sz val="10"/><name val="Arial"/><color rgb="FFFFFFFF"/></font>` +
     `<font><b/><sz val="16"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><i/><sz val="11"/><name val="Arial"/><color rgb="FF475569"/></font>` +
     `<font><b/><sz val="10"/><name val="Arial"/><color rgb="FF475569"/></font><font><b/><sz val="12"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><b/><sz val="10"/><name val="Arial"/></font></fonts>` +

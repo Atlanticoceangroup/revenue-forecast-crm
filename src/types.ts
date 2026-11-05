@@ -14,6 +14,7 @@ export type LeadSource = "outbound" | "inbound" | "indicação" | "evento" | "pa
 export type PredictableRevenueLeadType = "Seeds" | "Nets" | "Spears";
 export type LeadTemperature = "frio" | "morno" | "quente";
 export type BusinessUnit = "freight_projects" | "maritime_port";
+export type Currency = "BRL" | "USD" | "EUR";
 export type OfficialSalesSegment = "Serviços Portuários" | "Serviços Marítimos" | "Freight Forwarder" | "Projetos";
 export type LegacySalesSegment =
   | "Óleo e Gás"
@@ -36,6 +37,8 @@ export interface Opportunity {
   service: string;
   seller: string;
   value: number;
+  currency?: Currency;
+  fee?: number | null;
   enteredAt: string;
   lastInteractionAt: string;
   nextStep: string;
