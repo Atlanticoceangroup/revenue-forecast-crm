@@ -274,7 +274,9 @@ function App() {
         selectedBusinessUnit={selectedBusinessUnit}
       />
       <FunnelBoard
+        key={JSON.stringify([selectedBusinessUnit, selectedMonth, filters])}
         opportunities={boardOpportunities}
+        selectedStage={filters.stage}
           onOpen={(opportunity) => {
             setSelected(opportunity);
             setModalMode("view");
