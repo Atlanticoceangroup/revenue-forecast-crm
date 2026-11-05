@@ -1,7 +1,7 @@
 import { BUSINESS_UNITS, FUNNEL_STAGES } from "../constants";
 import type { BusinessUnit, Currency, Opportunity } from "../types";
 import { calculateMetrics, calculateMonthlyMetrics, daysBetween, sumFees } from "./metrics";
-import { opportunityCurrency, opportunityFee } from "./money";
+import { CURRENCIES, opportunityCurrency, opportunityFee } from "./money";
 
 interface WorkbookExportOptions {
   opportunities: Opportunity[];
@@ -64,12 +64,23 @@ export async function exportOpportunitiesWorkbook(options: WorkbookExportOptions
 }
 
 export async function buildOpportunitiesWorkbook({ opportunities, businessUnit, selectedMonth, generatedBy, currency: selectedCurrency }: WorkbookExportOptions) {
-  const currency = selectedCurrency ?? (opportunities[0] ? opportunityCurrency(opportunities[0]) : "BRL");
-  if (opportunities.some((opportunity) => opportunityCurrency(opportunity) !== currency)) {
-    throw new Error("Selecione uma única moeda antes de exportar a planilha.");
-  }
+  const currencies = CURRENCIES.map((item) => item.code).filter((currency) =>
+    opportunities.some((opportunity) => opportunityCurrency(opportunity) === currency),
+  );
+  if (!currencies.length) currencies.push(selectedCurrency ?? "BRL");
+  const currency = currencies[0];
+  const mixedCurrencies = currencies.length > 1;
   const { strToU8, zipSync } = await import("fflate");
-  const sheets = [
+  const sheets: WorksheetDefinition[] = mixedCurrencies ? [
+    createOpportunitiesSheet(opportunities),
+    ...currencies.flatMap((currency) => {
+      const group = opportunities.filter((opportunity) => opportunityCurrency(opportunity) === currency);
+      return [
+        { ...createSummarySheet(group, businessUnit, selectedMonth, generatedBy, currency), name: `Resumo ${currency}` },
+        { ...createSellersSheet(group), name: `Vendedores ${currency}` },
+      ];
+    }),
+  ] : [
     createSummarySheet(opportunities, businessUnit, selectedMonth, generatedBy, currency),
     createOpportunitiesSheet(opportunities),
     createSellersSheet(opportunities),
@@ -81,7 +92,7 @@ export async function buildOpportunitiesWorkbook({ opportunities, businessUnit, 
     "docProps/core.xml": strToU8(corePropertiesXml()),
     "xl/workbook.xml": strToU8(workbookXml(sheets)),
     "xl/_rels/workbook.xml.rels": strToU8(workbookRelationshipsXml(sheets.length)),
-    "xl/styles.xml": strToU8(stylesXml(currency)),
+    "xl/styles.xml": strToU8(stylesXml(mixedCurrencies ? null : currency)),
   };
 
   sheets.forEach((sheet, index) => {
@@ -314,10 +325,10 @@ function appPropertiesXml(sheets: WorksheetDefinition[]) {
   );
 }
 
-function stylesXml(currency: Currency) {
+function stylesXml(currency: Currency | null) {
   return xmlHeader(
     `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<numFmts count="3"><numFmt numFmtId="164" formatCode="&quot;${currency}&quot; #,##0.00"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/><numFmt numFmtId="166" formatCode="dd/mm/yyyy hh:mm"/></numFmts>` +
+    `<numFmts count="3"><numFmt numFmtId="164" formatCode="${currency ? `&quot;${currency}&quot; ` : ""}#,##0.00"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/><numFmt numFmtId="166" formatCode="dd/mm/yyyy hh:mm"/></numFmts>` +
     `<fonts count="7"><font><sz val="10"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><b/><sz val="10"/><name val="Arial"/><color rgb="FFFFFFFF"/></font>` +
     `<font><b/><sz val="16"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><i/><sz val="11"/><name val="Arial"/><color rgb="FF475569"/></font>` +
     `<font><b/><sz val="10"/><name val="Arial"/><color rgb="FF475569"/></font><font><b/><sz val="12"/><name val="Arial"/><color rgb="FF0F172A"/></font><font><b/><sz val="10"/><name val="Arial"/></font></fonts>` +
