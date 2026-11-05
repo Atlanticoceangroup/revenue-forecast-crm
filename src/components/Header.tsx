@@ -72,7 +72,7 @@ export function Header({
             }`}
           >
             <Download size={18} />
-            Exportar CSV
+            Exportar planilha
           </button>
           <button
             onClick={onAdd}

@@ -1,13 +1,13 @@
 import { Save } from "lucide-react";
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BUSINESS_UNIT_SEGMENTS, BUSINESS_UNITS, FUNNEL_STAGES, LOSS_REASONS } from "../constants";
 import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, FunnelStage, LeadSource, LeadTemperature, LossReason, OfficialSalesSegment, Opportunity, OptionLists, PredictableRevenueLeadType, Priority, SalesSegment } from "../types";
 import { todayIso } from "../utils/metrics";
 
 interface AddOpportunityFormProps {
   initial?: Opportunity | null;
-  onSubmit: (opportunity: Opportunity) => void;
+  onSubmit: (opportunity: Opportunity) => Promise<void>;
   onCancel: () => void;
   optionLists: OptionLists;
   onAddOption: (type: keyof OptionLists, name: string, segment?: OfficialSalesSegment) => Promise<void>;
@@ -38,6 +38,9 @@ export function AddOpportunityForm({
   const [selectedSegment, setSelectedSegment] = useState<OfficialSalesSegment>(
     normalizeSegmentForBusinessUnit(initial?.segment, selectedBusinessUnit) ?? availableSegments[0],
   );
+  const [opportunityId] = useState(() => initial?.id ?? `opp-${crypto.randomUUID()}`);
+  const isSubmittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const segmentServices = optionLists.servicesBySegment[selectedSegment] ?? [];
 
   useEffect(() => {
@@ -47,8 +50,9 @@ export function AddOpportunityForm({
     });
   }, [availableSegments, initial?.segment, selectedBusinessUnit]);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isSubmittingRef.current) return;
     const data = new FormData(event.currentTarget);
     const stage = data.get("stage") as FunnelStage;
     const enteredAt = String(data.get("enteredAt"));
@@ -70,7 +74,7 @@ export function AddOpportunityForm({
       return;
     }
     const opportunity: Opportunity = {
-      id: initial?.id ?? `opp-${crypto.randomUUID()}`,
+      id: opportunityId,
       businessUnit: selectedBusinessUnit,
       clientId: clientId || undefined,
       clientName,
@@ -96,11 +100,20 @@ export function AddOpportunityForm({
         [stage]: initial?.stageHistory?.[stage] ?? todayIso(),
       },
     };
-    onSubmit(opportunity);
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    try {
+      await onSubmit(opportunity);
+    } catch {
+      window.alert("Não foi possível salvar a oportunidade. Confira sua conexão e tente novamente.");
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} aria-busy={isSubmitting} className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Base operacional" name="businessUnitLabel" value={selectedBusinessUnitLabel} readOnly />
         <ClientSelect
@@ -165,12 +178,21 @@ export function AddOpportunityForm({
         />
       </label>
       <div className="flex justify-end gap-3">
-        <button type="button" onClick={onCancel} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={isSubmitting}
+          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+        >
           Cancelar
         </button>
-        <button type="submit" className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="inline-flex min-w-28 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+        >
           <Save size={16} />
-          Salvar
+          {isSubmitting ? "Salvando..." : "Salvar"}
         </button>
       </div>
     </form>

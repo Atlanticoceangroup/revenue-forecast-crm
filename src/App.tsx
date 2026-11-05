@@ -6,7 +6,7 @@ import { FunnelBoard } from "./components/FunnelBoard";
 import { Header } from "./components/Header";
 import { LoginScreen } from "./components/LoginScreen";
 import { OpportunityModal } from "./components/OpportunityModal";
-import { exportOpportunitiesCsv } from "./utils/exportCsv";
+import { exportOpportunitiesWorkbook } from "./utils/exportWorkbook";
 import {
   isSupabaseConfigured,
   addOption,
@@ -181,16 +181,23 @@ function App() {
 
   async function handleSave(opportunity: Opportunity) {
     if (!currentUser) return;
-    opportunity.businessUnit = selectedBusinessUnit;
-    if (currentUser.role !== "manager" && currentUser.role !== "admin") {
-      opportunity.seller = currentUser.sellerName;
-    }
+    const isCreating = modalMode === "create";
+    const savedOpportunity: Opportunity = {
+      ...opportunity,
+      businessUnit: selectedBusinessUnit,
+      seller:
+        currentUser.role === "manager" || currentUser.role === "admin"
+          ? opportunity.seller
+          : currentUser.sellerName,
+    };
+    await upsertOpportunity(savedOpportunity);
     setOpportunities((current) => {
-      const exists = current.some((item) => item.id === opportunity.id);
-      return exists ? current.map((item) => (item.id === opportunity.id ? opportunity : item)) : [opportunity, ...current];
+      const exists = current.some((item) => item.id === savedOpportunity.id);
+      return exists
+        ? current.map((item) => (item.id === savedOpportunity.id ? savedOpportunity : item))
+        : [savedOpportunity, ...current];
     });
-    await upsertOpportunity(opportunity);
-    setSelected(opportunity);
+    setSelected(isCreating ? null : savedOpportunity);
     setModalMode("view");
   }
 
@@ -238,7 +245,14 @@ function App() {
         onAdd={openCreate}
         onExport={() => {
           if (currentUser?.role === "admin" || currentUser?.role === "manager") {
-            exportOpportunitiesCsv(visibleOpportunities);
+            void exportOpportunitiesWorkbook({
+              opportunities: visibleOpportunities,
+              businessUnit: selectedBusinessUnit,
+              selectedMonth,
+              generatedBy: currentUser.name,
+            }).catch(() => {
+              window.alert("Não foi possível gerar a planilha. Tente novamente.");
+            });
           }
         }}
         storageMode={isSupabaseConfigured ? "cloud" : "local"}
@@ -268,7 +282,7 @@ function App() {
         onMove={handleMove}
       />
       <footer className="mx-auto max-w-[1800px] px-4 pb-8 text-xs text-slate-500 sm:px-6">
-        Integração pronta: configure as variáveis do Supabase em <code>.env</code> para colaboração na nuvem. O export CSV
+        Integração pronta: configure as variáveis do Supabase em <code>.env</code> para colaboração na nuvem. A exportação de planilha
         fica restrito a administradores e gestores.
         <span className="mt-2 block font-semibold text-slate-400">
           Desenvolvido por Paulo Penna - Atlantic Ocean Services 2026

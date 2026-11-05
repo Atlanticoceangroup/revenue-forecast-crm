@@ -11,7 +11,7 @@ interface OpportunityModalProps {
   mode: "view" | "edit" | "create";
   onClose: () => void;
   onEdit: () => void;
-  onSave: (opportunity: Opportunity) => void;
+  onSave: (opportunity: Opportunity) => Promise<void>;
   onDelete: (opportunity: Opportunity) => void;
   optionLists: OptionLists;
   onAddOption: (type: keyof OptionLists, name: string, segment?: OfficialSalesSegment) => Promise<void>;
