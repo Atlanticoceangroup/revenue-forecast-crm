@@ -22,7 +22,6 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const isOverdue = !isClosed && Boolean(opportunity.nextActionDate && opportunity.nextActionDate < today);
-  const isToday = !isClosed && opportunity.nextActionDate === today;
   const isCritical = !isClosed && stalled > 14;
   const isStalled = !isClosed && stalled > 7;
   const needsAttention = isOverdue || isStalled || (!isClosed && !opportunity.nextActionDate);
@@ -46,7 +45,7 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
     <article
       aria-label={`${opportunity.clientName}: ${opportunity.opportunityName}`}
       aria-busy={isMoving}
-      className={`rounded-xl border bg-white shadow-sm transition-shadow hover:shadow-md ${opportunity.stage === "Fechado - Ganhou" ? "border-emerald-200" : opportunity.stage === "Fechado - Perdido" ? "border-red-200" : needsAttention ? "border-amber-300" : "border-slate-200"}`}
+      className={`rounded-xl border bg-white shadow-sm transition-shadow hover:shadow-md ${needsAttention ? "border-amber-300" : "border-slate-200"}`}
     >
       <div className="grid min-w-0 grid-cols-2 items-start gap-4 p-4 md:grid-cols-3 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.2fr)_auto] xl:items-center">
         <button
@@ -55,14 +54,14 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
           className="col-span-2 min-w-0 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-600 md:col-span-1"
           aria-label={`Abrir ${opportunity.opportunityName}, cliente ${opportunity.clientName}`}
         >
-          <span className="block break-words text-sm font-bold text-slate-950" title={opportunity.clientName}>{opportunity.clientName}</span>
-          <span className="mt-1 line-clamp-2 break-words text-sm text-slate-600" title={opportunity.opportunityName}>{opportunity.opportunityName}</span>
+          <span className="block truncate text-sm font-bold text-slate-950" title={opportunity.clientName}>{opportunity.clientName}</span>
+          <span className="mt-1 block truncate text-sm text-slate-600" title={opportunity.opportunityName}>{opportunity.opportunityName}</span>
           <span className="mt-1 block truncate text-xs text-slate-500" title={`${opportunity.segment} · ${opportunity.service}`}>{opportunity.segment} · {opportunity.service}</span>
         </button>
         <div className="min-w-0">
           <p className="text-xs text-slate-500">Fee Atlantic</p>
           <p className="mt-1 break-words text-base font-bold text-slate-950">{fee === null ? "Não informado" : formatMoney(fee, currency)}</p>
-          <p className="mt-1 break-words text-xs text-slate-600">Bruto: {formatMoney(opportunity.value, currency)}</p>
+          <p className="mt-1 text-xs text-slate-600">Bruto: {formatMoney(opportunity.value, currency)}</p>
           <p className="mt-1 text-xs text-slate-500">Probabilidade: {opportunity.probability}%</p>
         </div>
         <div className="min-w-0">
@@ -84,15 +83,14 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
           >
             {FUNNEL_STAGES.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
           </select>
-          {isClosed && <span className="mt-1 block text-xs text-slate-500">Encerrada · edite nos detalhes</span>}
         </label>
         <div className="min-w-0">
           <p className="flex items-center gap-1 text-xs text-slate-500"><CalendarClock size={13} aria-hidden="true" /> {isClosed ? "Fechamento" : "Próxima ação"}</p>
           <p className={`mt-1 text-sm font-semibold ${needsAttention ? "text-amber-800" : "text-slate-700"}`}>
             {isClosed ? formatDate(opportunity.closedAt) : formatDate(opportunity.nextActionDate)}
-            {isOverdue ? " · atrasada" : isToday ? " · hoje" : ""}
+            {isOverdue ? " · atrasada" : ""}
           </p>
-          <p className="mt-1 line-clamp-2 break-words text-xs text-slate-600" title={isClosed ? opportunity.lossReason : opportunity.nextStep}>
+          <p className="mt-1 truncate text-xs text-slate-500" title={isClosed ? opportunity.lossReason : opportunity.nextStep}>
             {isClosed ? opportunity.lossReason || "Oportunidade encerrada" : opportunity.nextStep}
           </p>
           {isStalled && <p className={`mt-1 text-xs font-semibold ${isCritical ? "text-red-700" : "text-amber-800"}`}>{stalled} dias sem interação</p>}
