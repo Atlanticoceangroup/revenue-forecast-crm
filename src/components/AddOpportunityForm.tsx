@@ -1,13 +1,11 @@
 import { Save } from "lucide-react";
 import type React from "react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BUSINESS_UNIT_SEGMENTS, BUSINESS_UNITS, FUNNEL_STAGES, LOSS_REASONS } from "../constants";
 import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, FunnelStage, LeadSource, LeadTemperature, LossReason, OfficialSalesSegment, Opportunity, OptionLists, PredictableRevenueLeadType, Priority, SalesSegment } from "../types";
 import { todayIso } from "../utils/metrics";
 import { CURRENCIES, formatMoney, moneyInput, opportunityCurrency, parseMoney, validateQuotation } from "../utils/money";
 import type { Currency } from "../types";
-import { useFeedback } from "./ui/Feedback";
-import { Dialog } from "./ui/Dialog";
 
 interface AddOpportunityFormProps {
   initial?: Opportunity | null;
@@ -20,8 +18,6 @@ interface AddOpportunityFormProps {
   currentUser: CurrentUser;
   selectedBusinessUnit: BusinessUnit;
   defaultCurrency?: Currency;
-  onDirtyChange?: (dirty: boolean) => void;
-  onBusyChange?: (busy: boolean) => void;
 }
 
 const sources: LeadSource[] = ["outbound", "inbound", "indicação", "evento", "parceiro"];
@@ -40,8 +36,6 @@ export function AddOpportunityForm({
   currentUser,
   selectedBusinessUnit,
   defaultCurrency = "BRL",
-  onDirtyChange,
-  onBusyChange,
 }: AddOpportunityFormProps) {
   const selectedBusinessUnitLabel = BUSINESS_UNITS.find((unit) => unit.id === selectedBusinessUnit)?.label ?? selectedBusinessUnit;
   const availableSegments = BUSINESS_UNIT_SEGMENTS[selectedBusinessUnit];
@@ -55,23 +49,7 @@ export function AddOpportunityForm({
   const [grossInput, setGrossInput] = useState(() => moneyInput(initial?.value));
   const [feeInput, setFeeInput] = useState(() => moneyInput(initial?.fee));
   const [financialError, setFinancialError] = useState("");
-  const [formError, setFormError] = useState("");
-  const [childBusy, setChildBusy] = useState(false);
-  const [stage, setStage] = useState<FunnelStage>(initial?.stage ?? FUNNEL_STAGES[0]);
-  const formRef = useRef<HTMLFormElement>(null);
   const segmentServices = optionLists.servicesBySegment[selectedSegment] ?? [];
-  useEffect(() => { onBusyChange?.(isSubmitting || childBusy); }, [isSubmitting, childBusy, onBusyChange]);
-
-  function handleChildBusy(busy: boolean) {
-    setChildBusy(busy);
-    onBusyChange?.(busy || isSubmittingRef.current);
-  }
-
-  function fail(message: string, name: string) {
-    setFormError(message);
-    const input = formRef.current?.elements.namedItem(name) as HTMLElement | null;
-    input?.focus();
-  }
 
   useEffect(() => {
     setSelectedSegment((current) => {
@@ -82,8 +60,7 @@ export function AddOpportunityForm({
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isSubmittingRef.current || childBusy) return;
-    setFormError("");
+    if (isSubmittingRef.current) return;
     let gross: number;
     let fee: number | null;
     try {
@@ -93,7 +70,6 @@ export function AddOpportunityForm({
       setFinancialError("");
     } catch (error) {
       setFinancialError(error instanceof Error ? error.message : "Confira os valores da cotação.");
-      (formRef.current?.elements.namedItem("value") as HTMLElement | null)?.focus();
       return;
     }
     const data = new FormData(event.currentTarget);
@@ -102,18 +78,18 @@ export function AddOpportunityForm({
     const clientId = String(data.get("clientId") ?? "").trim();
     const clientName = String(data.get("clientName") ?? "").trim();
     if (!clientName || clientName === "Novo cliente") {
-      fail("Cadastre ou selecione um cliente antes de criar a oportunidade.", "clientId");
+      window.alert("Cadastre ou selecione um cliente antes de criar a oportunidade.");
       return;
     }
     const nextStep = String(data.get("nextStep") ?? "").trim();
     const nextActionDate = String(data.get("nextActionDate") ?? "");
     if (!stage.startsWith("Fechado") && (!nextStep || !nextActionDate)) {
-      fail("Preencha o próximo passo e a data da próxima ação.", !nextActionDate ? "nextActionDate" : "nextStep");
+      window.alert("Para cards abertos, preencha o próximo passo e a data da próxima ação.");
       return;
     }
     const lossReason = data.get("lossReason") as LossReason | null;
     if (stage === "Fechado - Perdido" && !lossReason) {
-      fail("Informe o motivo da perda.", "lossReason");
+      window.alert("Para fechar como perdido, informe o motivo da perda.");
       return;
     }
     const opportunity: Opportunity = {
@@ -132,7 +108,7 @@ export function AddOpportunityForm({
       lastInteractionAt: String(data.get("lastInteractionAt")),
       nextStep,
       nextActionDate: nextActionDate || undefined,
-      probability: stage === "Fechado - Ganhou" ? 100 : stage === "Fechado - Perdido" ? 0 : Number(data.get("probability")),
+      probability: Number(data.get("probability")),
       source: data.get("source") as LeadSource,
       leadType: data.get("leadType") as PredictableRevenueLeadType,
       stage,
@@ -147,33 +123,25 @@ export function AddOpportunityForm({
     };
     isSubmittingRef.current = true;
     setIsSubmitting(true);
-    onBusyChange?.(true);
     try {
       await onSubmit(opportunity);
-      onDirtyChange?.(false);
     } catch {
-      setFormError("Não foi possível salvar. Seus dados foram mantidos; confira a conexão e tente novamente.");
+      window.alert("Não foi possível salvar a oportunidade. Confira sua conexão e tente novamente.");
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
-      onBusyChange?.(false);
     }
   }
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} onChangeCapture={() => onDirtyChange?.(true)} aria-busy={isSubmitting || childBusy} className="space-y-4">
-      <p className="text-xs text-slate-500">Campos com * são obrigatórios. Você pode completar a cotação depois.</p>
-      <fieldset disabled={isSubmitting || childBusy} className="space-y-4">
+    <form onSubmit={handleSubmit} aria-busy={isSubmitting} className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <h3 className="font-bold text-slate-800 sm:col-span-2">Cliente e oportunidade</h3>
         <Field label="Base operacional" name="businessUnitLabel" value={selectedBusinessUnitLabel} readOnly />
         <ClientSelect
           name="clientId"
-          defaultValue={initial?.clientId ?? findClientIdByName(optionLists.clientOptions, initial?.clientName) ?? ""}
+          defaultValue={initial?.clientId ?? findClientIdByName(optionLists.clientOptions, initial?.clientName) ?? optionLists.clientOptions[0]?.id ?? ""}
           options={optionLists.clientOptions}
           onAddClient={onAddClient}
-          onBusyChange={handleChildBusy}
-          onCreated={() => onDirtyChange?.(true)}
         />
         <Field label="Oportunidade" name="opportunityName" defaultValue={initial?.opportunityName} required />
         <Select
@@ -195,8 +163,6 @@ export function AddOpportunityForm({
           resetKey={selectedSegment}
           onAdd={(value) => onAddOption("services", value, selectedSegment)}
           onDelete={(value) => onDeleteOption("services", value, selectedSegment)}
-          onBusyChange={handleChildBusy}
-          onSelectionChange={() => onDirtyChange?.(true)}
         />
         {currentUser.role === "manager" || currentUser.role === "admin" ? (
           <ManagedSelect
@@ -206,8 +172,6 @@ export function AddOpportunityForm({
             options={optionLists.sellers}
             onAdd={(value) => onAddOption("sellers", value)}
             onDelete={(value) => onDeleteOption("sellers", value)}
-            onBusyChange={handleChildBusy}
-            onSelectionChange={() => onDirtyChange?.(true)}
           />
         ) : (
           <Field label="Vendedor" name="seller" value={currentUser.sellerName} readOnly />
@@ -229,35 +193,28 @@ export function AddOpportunityForm({
           <p className="mt-2 text-sm font-semibold text-cyan-800">Receita Atlantic: {feePreview(feeInput, currency)}</p>
           {financialError && <p role="alert" className="mt-2 text-sm font-semibold text-red-700">{financialError}</p>}
         </fieldset>
-        <h3 className="pt-2 font-bold text-slate-800 sm:col-span-2">Etapa e próxima ação</h3>
-        <Select label="Etapa" name="stage" value={stage} onChange={(event) => setStage(event.target.value as FunnelStage)} options={FUNNEL_STAGES} />
-        <Field label="Data da próxima ação" name="nextActionDate" type="date" defaultValue={initial?.nextActionDate ?? todayIso()} required={!stage.startsWith("Fechado")} />
+        <Field label="Entrada no funil" name="enteredAt" type="date" defaultValue={initial?.enteredAt ?? todayIso()} required />
+        <Field label="Última interação" name="lastInteractionAt" type="date" defaultValue={initial?.lastInteractionAt ?? todayIso()} required />
+        <Field label="Data da próxima ação" name="nextActionDate" type="date" defaultValue={initial?.nextActionDate ?? todayIso()} />
+        <Select label="Etapa" name="stage" defaultValue={initial?.stage ?? FUNNEL_STAGES[0]} options={FUNNEL_STAGES} />
         <Field label="Probabilidade (%)" name="probability" type="number" min={0} max={100} defaultValue={initial?.probability ?? 15} required />
-        {stage === "Fechado - Perdido" && <Select label="Motivo da perda" name="lossReason" defaultValue={initial?.lossReason ?? ""} options={["", ...LOSS_REASONS]} required />}
-      </div>
-      <details className="rounded-lg border border-slate-200 bg-white p-3">
-        <summary className="cursor-pointer text-sm font-semibold text-slate-700">Informações complementares</summary>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Field label="Entrada no funil" name="enteredAt" type="date" defaultValue={initial?.enteredAt ?? todayIso()} />
-        <Field label="Última interação" name="lastInteractionAt" type="date" defaultValue={initial?.lastInteractionAt ?? todayIso()} />
         <Select label="Origem" name="source" defaultValue={initial?.source ?? "outbound"} options={sources} />
         <Select label="Tipo Receita Previsível" name="leadType" defaultValue={initial?.leadType ?? "Spears"} options={leadTypes} />
         <Select label="Prioridade" name="priority" defaultValue={initial?.priority ?? "média"} options={priorities} />
         <Select label="Temperatura" name="temperature" defaultValue={initial?.temperature ?? "morno"} options={temperatures} />
-        </div>
-      </details>
+        <Select label="Motivo da perda" name="lossReason" defaultValue={initial?.lossReason ?? ""} options={["", ...LOSS_REASONS]} />
+      </div>
       <label className="block">
-        <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">Próximo passo{!stage.startsWith("Fechado") ? " *" : ""}</span>
+        <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">Próximo passo</span>
         <textarea
           name="nextStep"
           defaultValue={initial?.nextStep ?? "Definir próxima ação comercial"}
           rows={3}
-          required={!stage.startsWith("Fechado")}
+          required
           className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:bg-white"
         />
       </label>
-      {formError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-800">{formError}</p>}
-      <div className="sticky -bottom-5 z-10 flex justify-end gap-3 border-t border-slate-200 bg-white py-4">
+      <div className="flex justify-end gap-3">
         <button
           type="button"
           onClick={onCancel}
@@ -275,7 +232,6 @@ export function AddOpportunityForm({
           {isSubmitting ? "Salvando..." : "Salvar"}
         </button>
       </div>
-      </fieldset>
     </form>
   );
 }
@@ -283,7 +239,7 @@ export function AddOpportunityForm({
 function Field({ label, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { label: string; name: string }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}{props.required ? " *" : ""}</span>
+      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}</span>
       <input
         {...props}
         className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-500 focus:bg-white"
@@ -304,7 +260,7 @@ function feePreview(input: string, currency: Currency) {
 function Select({ label, options, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; options: string[] }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}{props.required ? " *" : ""}</span>
+      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}</span>
       <select
         {...props}
         className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-500 focus:bg-white"
@@ -324,22 +280,14 @@ function ClientSelect({
   defaultValue,
   options,
   onAddClient,
-  onBusyChange,
-  onCreated,
 }: {
   name: string;
   defaultValue: string;
   options: ClientOption[];
   onAddClient: (client: ClientDraft) => Promise<ClientOption>;
-  onBusyChange: (busy: boolean) => void;
-  onCreated: () => void;
 }) {
   const [value, setValue] = useState(defaultValue);
   const [isAdding, setIsAdding] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const savingRef = useRef(false);
-  const [error, setError] = useState("");
-  const { notify } = useFeedback();
   const [draft, setDraft] = useState<ClientDraft>({
     legalName: "",
     tradeName: "",
@@ -357,19 +305,11 @@ function ClientSelect({
   const selectedClient = options.find((option) => option.id === value);
   const currentOptions = selectedClient || !value ? options : [{ id: value, displayName: value, legalName: value }, ...options];
 
-  async function handleAddClient(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (savingRef.current) return;
+  async function handleAddClient() {
     if (!draft.legalName.trim() || !draft.focalPoint.trim() || !draft.companyPhone.trim() || !draft.contactEmail.trim()) {
-      setError("Preencha razão social, ponto focal, telefone e e-mail do cliente.");
+      window.alert("Preencha razão social, ponto focal, telefone e e-mail do cliente.");
       return;
     }
-    savingRef.current = true;
-    setIsSaving(true);
-    onBusyChange(true);
-    setError("");
-    try {
     const createdClient = await onAddClient(draft);
     setValue(createdClient.id);
     setDraft({
@@ -387,25 +327,18 @@ function ClientSelect({
       notes: "",
     });
     setIsAdding(false);
-    onCreated();
-    notify("Cliente incluído e selecionado para a oportunidade.");
-    } catch { setError("Não foi possível incluir o cliente. Confira os dados e tente novamente."); }
-    finally { savingRef.current = false; setIsSaving(false); onBusyChange(false); }
   }
 
   return (
     <div className="block sm:col-span-2">
-      <label htmlFor="opportunity-client" className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">Cliente *</label>
+      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">Cliente</span>
       <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
         <select
-          id="opportunity-client"
-          required
           name={name}
           value={value}
           onChange={(event) => setValue(event.target.value)}
           className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-500 focus:bg-white"
         >
-          <option value="">Selecione um cliente</option>
           {currentOptions.map((option) => (
             <option key={option.id} value={option.id}>
               {option.displayName}
@@ -416,17 +349,13 @@ function ClientSelect({
         <button
           type="button"
           onClick={() => setIsAdding((current) => !current)}
-          aria-expanded={isAdding}
           className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600"
         >
           Cadastrar cliente
         </button>
       </div>
       {isAdding ? (
-        <Dialog labelledBy="client-dialog-title" onClose={() => { if (!savingRef.current) setIsAdding(false); }}>
-        <h2 id="client-dialog-title" className="mb-4 text-lg font-bold text-slate-950">Cadastrar cliente</h2>
-        <form onSubmit={handleAddClient}>
-        <fieldset disabled={isSaving} className="grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
           <ClientField label="Razão social" value={draft.legalName} required onChange={(legalName) => setDraft({ ...draft, legalName })} />
           <ClientField label="Nome fantasia" value={draft.tradeName ?? ""} onChange={(tradeName) => setDraft({ ...draft, tradeName })} />
           <ClientField label="CNPJ" value={draft.taxId ?? ""} onChange={(taxId) => setDraft({ ...draft, taxId })} />
@@ -448,16 +377,14 @@ function ClientSelect({
               Cancelar cadastro
             </button>
             <button
-              type="submit"
+              type="button"
+              onClick={handleAddClient}
               className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white"
             >
-              {isSaving ? "Incluindo..." : "Incluir cliente"}
+              Incluir cliente
             </button>
           </div>
-        </fieldset>
-        {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
-        </form>
-        </Dialog>
+        </div>
       ) : null}
     </div>
   );
@@ -522,8 +449,6 @@ function ManagedSelect({
   onAdd,
   onDelete,
   resetKey,
-  onBusyChange,
-  onSelectionChange,
 }: {
   label: string;
   name: string;
@@ -532,17 +457,10 @@ function ManagedSelect({
   onAdd: (value: string) => Promise<void>;
   onDelete?: (value: string) => Promise<void>;
   resetKey?: string;
-  onBusyChange: (busy: boolean) => void;
-  onSelectionChange: () => void;
 }) {
-  const inputId = useId();
   const [value, setValue] = useState(defaultValue);
   const [newValue, setNewValue] = useState("");
   const [isAdding, setIsAdding] = useState(false);
-  const busyRef = useRef(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const { decide } = useFeedback();
   const currentOptions = options.includes(value) ? options : [value, ...options].filter(Boolean);
 
   useEffect(() => {
@@ -550,40 +468,30 @@ function ManagedSelect({
   }, [defaultValue, resetKey]);
 
   async function handleAdd() {
-    if (busyRef.current) return;
     const normalized = newValue.trim();
     if (!normalized) return;
-    busyRef.current = true; setBusy(true); onBusyChange(true); setError("");
-    try {
     await onAdd(normalized);
     setValue(normalized);
-    onSelectionChange();
     setNewValue("");
     setIsAdding(false);
-    } catch { setError("Não foi possível incluir. Tente novamente."); }
-    finally { busyRef.current = false; setBusy(false); onBusyChange(false); }
   }
 
   async function handleDelete() {
-    if (!onDelete || !value || busyRef.current) return;
-    const confirmed = await decide({ title: `Excluir ${label.toLowerCase()} da lista?`, message: `“${value}” deixará de aparecer nas opções. Os cards existentes serão preservados.`, confirmLabel: "Excluir da lista", destructive: true });
+    if (!onDelete || !value) return;
+    const confirmed = window.confirm(
+      `Excluir "${value}" da lista de ${label.toLowerCase()}? Os cards existentes não serão apagados.`,
+    );
     if (!confirmed) return;
-    busyRef.current = true; setBusy(true); onBusyChange(true); setError("");
-    try {
     await onDelete(value);
     const fallback = currentOptions.find((option) => option !== value) ?? "";
     setValue(fallback);
-    onSelectionChange();
-    } catch { setError("Não foi possível excluir. Tente novamente."); }
-    finally { busyRef.current = false; setBusy(false); onBusyChange(false); }
   }
 
   return (
-    <div className="block" aria-busy={busy}>
-      <label htmlFor={inputId} className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}</label>
+    <div className="block">
+      <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">{label}</span>
       <div className={`grid gap-2 ${onDelete ? "sm:grid-cols-[1fr_auto_auto]" : "sm:grid-cols-[1fr_auto]"}`}>
         <select
-          id={inputId}
           name={name}
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -598,7 +506,6 @@ function ManagedSelect({
         <button
           type="button"
           onClick={() => setIsAdding((current) => !current)}
-          aria-expanded={isAdding}
           className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600"
         >
           Adicionar
@@ -617,7 +524,6 @@ function ManagedSelect({
         <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
           <input
             value={newValue}
-            aria-label={`Novo ${label.toLowerCase()}`}
             onChange={(event) => setNewValue(event.target.value)}
             placeholder={`Novo ${label.toLowerCase()}`}
             className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -631,7 +537,6 @@ function ManagedSelect({
           </button>
         </div>
       ) : null}
-      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </div>
   );
 }

@@ -10,12 +10,11 @@ interface FunnelBoardProps {
   selectedStage: string;
   onOpen: (opportunity: Opportunity) => void;
   onMove: (id: string, stage: FunnelStage) => Promise<void>;
-  pageSize: number;
-  onPageSizeChange: (size: number) => void;
 }
 
-export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove, pageSize, onPageSizeChange }: FunnelBoardProps) {
+export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove }: FunnelBoardProps) {
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const pageCount = Math.max(1, Math.ceil(opportunities.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const firstIndex = (currentPage - 1) * pageSize;
@@ -39,7 +38,7 @@ export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove, page
           <select
             value={pageSize}
             onChange={(event) => {
-              onPageSizeChange(Number(event.target.value));
+              setPageSize(Number(event.target.value));
               setPage(1);
             }}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 focus-visible:outline-cyan-600"
@@ -50,9 +49,6 @@ export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove, page
       </div>
       {pageOpportunities.length ? (
         <div className="space-y-3">
-          <div aria-hidden="true" className="hidden gap-4 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500 xl:grid xl:grid-cols-[minmax(0,1.7fr)_minmax(0,.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.2fr)_auto]">
-            <span>Cliente e oportunidade</span><span>Valores</span><span>Responsável</span><span>Etapa</span><span>Próxima atividade</span><span className="w-24">Ações</span>
-          </div>
           {pageOpportunities.map((opportunity) => (
             <OpportunityCard key={opportunity.id} opportunity={opportunity} onOpen={onOpen} onMove={onMove} />
           ))}

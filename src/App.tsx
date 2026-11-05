@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_BUSINESS_UNIT, DEFAULT_SERVICES_BY_SEGMENT, LOSS_REASONS } from "./constants";
 import { DashboardMetrics } from "./components/DashboardMetrics";
 import { FiltersBar } from "./components/FiltersBar";
@@ -26,18 +26,8 @@ import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, Filters, Fun
 import { todayIso } from "./utils/metrics";
 import { opportunityCurrency } from "./utils/money";
 import type { Currency } from "./types";
-import { useFeedback } from "./components/ui/Feedback";
-import { filterOpportunities, sortOpportunities } from "./utils/opportunityFilters";
-import type { QuickFilter, SortOrder } from "./utils/opportunityFilters";
-import { readPageSize, savePageSize } from "./utils/viewPreferences";
 
 function App() {
-  const { notify, decide } = useFeedback();
-  const movingIds = useRef(new Set<string>());
-  const [isExporting, setIsExporting] = useState(false);
-  const [pageSize, setPageSize] = useState(readPageSize);
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("nextAction");
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [optionLists, setOptionLists] = useState<OptionLists>({
     clients: [],
@@ -66,19 +56,14 @@ function App() {
         setOpportunities(loadedOpportunities);
         setOptionLists(loadedOptions);
       })
-      .catch(() => {
-        signOut();
-        setCurrentUser(null);
-        notify("Não foi possível carregar sua sessão. Entre novamente.", "error");
-      })
       .finally(() => setIsLoading(false));
-  }, [notify]);
+  }, []);
 
   useEffect(() => {
     if (!isLoading) {
-      void persistOpportunities(opportunities).catch(() => notify("Não foi possível salvar os dados neste navegador.", "error"));
+      persistOpportunities(opportunities);
     }
-  }, [isLoading, opportunities, notify]);
+  }, [isLoading, opportunities]);
 
   const visibleOpportunities = useMemo(() => {
     if (!currentUser) return [];
@@ -91,17 +76,30 @@ function App() {
     });
   }, [currentUser, opportunities, selectedBusinessUnit, selectedCurrency]);
 
-  const filteredOpportunities = useMemo(() => currentUser
-    ? filterOpportunities(visibleOpportunities, filters, quickFilter, currentUser)
-    : [], [filters, visibleOpportunities, quickFilter, currentUser]);
+  const filteredOpportunities = useMemo(() => {
+    const search = filters.search.trim().toLowerCase();
+    return visibleOpportunities.filter((opportunity) => {
+      const matchesSeller = !filters.seller || opportunity.seller === filters.seller;
+      const matchesStage = !filters.stage || opportunity.stage === filters.stage;
+      const matchesSegment = !filters.segment || opportunity.segment === filters.segment;
+      const matchesService = !filters.service || opportunity.service === filters.service;
+      const matchesSearch =
+        !search ||
+        opportunity.clientName.toLowerCase().includes(search) ||
+        opportunity.opportunityName.toLowerCase().includes(search) ||
+        opportunity.segment.toLowerCase().includes(search) ||
+        opportunity.service.toLowerCase().includes(search);
+      return matchesSeller && matchesStage && matchesSegment && matchesService && matchesSearch;
+    });
+  }, [filters, visibleOpportunities]);
 
   const boardOpportunities = useMemo(
     () =>
-      sortOpportunities(filteredOpportunities.filter((opportunity) => {
+      filteredOpportunities.filter((opportunity) => {
         if (!opportunity.stage.startsWith("Fechado")) return true;
         return opportunity.closedAt?.startsWith(selectedMonth);
-      }), sortOrder),
-    [filteredOpportunities, selectedMonth, sortOrder],
+      }),
+    [filteredOpportunities, selectedMonth],
   );
 
   async function handleAddOption(type: keyof OptionLists, name: string, segment?: OfficialSalesSegment) {
@@ -141,8 +139,6 @@ function App() {
     setSelected(null);
     setSelectedBusinessUnit(DEFAULT_BUSINESS_UNIT);
     setSelectedCurrency("BRL");
-    setFilters({ seller: "", stage: "", segment: "", service: "", search: "" });
-    setQuickFilter("all");
   }
 
   function handleBusinessUnitChange(businessUnit: BusinessUnit) {
@@ -160,13 +156,11 @@ function App() {
 
   async function handleMove(id: string, stage: FunnelStage) {
     const sourceOpportunity = opportunities.find((opportunity) => opportunity.id === id);
-    if (!sourceOpportunity || sourceOpportunity.stage === stage || !currentUser || !canEditOpportunity(sourceOpportunity) || movingIds.current.has(id)) {
+    if (!sourceOpportunity || sourceOpportunity.stage === stage || !currentUser || !canEditOpportunity(sourceOpportunity)) {
       return;
     }
 
-    movingIds.current.add(id);
-    try {
-    const lossReason = stage === "Fechado - Perdido" ? await requestLossReason(sourceOpportunity.lossReason) : undefined;
+    const lossReason = stage === "Fechado - Perdido" ? requestLossReason(sourceOpportunity.lossReason) : undefined;
     if (stage === "Fechado - Perdido" && !lossReason) return;
 
     const movedOpportunity: Opportunity = {
@@ -182,20 +176,11 @@ function App() {
       },
     };
 
-    await upsertOpportunity(movedOpportunity);
     setOpportunities((current) =>
       current.map((opportunity) => (opportunity.id === id ? movedOpportunity : opportunity)),
     );
-    if (selected?.id === id) setSelected(movedOpportunity);
-    try {
-      await recordStageMove(id, sourceOpportunity.stage, stage, currentUser);
-      notify(`Etapa atualizada para ${stage}.`);
-    } catch {
-      notify("A etapa foi salva, mas não foi possível registrar o histórico.", "error");
-    }
-    } catch {
-      notify("Não foi possível alterar a etapa. A oportunidade foi mantida como estava.", "error");
-    } finally { movingIds.current.delete(id); }
+    await upsertOpportunity(movedOpportunity);
+    await recordStageMove(id, sourceOpportunity.stage, stage, currentUser);
   }
 
   async function handleSave(opportunity: Opportunity) {
@@ -219,20 +204,16 @@ function App() {
     setSelected(isCreating ? null : savedOpportunity);
     setSelectedCurrency(opportunityCurrency(savedOpportunity));
     setModalMode("view");
-    notify(isCreating ? "Oportunidade criada." : "Oportunidade atualizada.");
   }
 
   async function handleDeleteOpportunity(opportunity: Opportunity) {
     if (currentUser?.role !== "manager" && currentUser?.role !== "admin") return;
-    const confirmed = await decide({ title: "Excluir oportunidade?", message: `A oportunidade “${opportunity.opportunityName}”, de ${opportunity.clientName}, e seu histórico serão excluídos. Essa ação não pode ser desfeita pela interface.`, confirmLabel: "Excluir oportunidade", destructive: true });
+    const confirmed = window.confirm(`Excluir a oportunidade "${opportunity.opportunityName}" de ${opportunity.clientName}?`);
     if (!confirmed) return;
-    try {
     await deleteOpportunity(opportunity.id);
     setOpportunities((current) => current.filter((item) => item.id !== opportunity.id));
     setSelected(null);
     setModalMode("view");
-    notify("Oportunidade excluída.");
-    } catch { notify("Não foi possível excluir. A oportunidade foi mantida.", "error"); }
   }
 
   function openCreate() {
@@ -240,10 +221,15 @@ function App() {
     setModalMode("create");
   }
 
-  async function requestLossReason(currentReason?: Opportunity["lossReason"]) {
+  function requestLossReason(currentReason?: Opportunity["lossReason"]) {
     if (currentReason) return currentReason;
-    const answer = await decide({ title: "Fechar como perdido", message: "Selecione o motivo da perda para registrar o fechamento.", choices: LOSS_REASONS, confirmLabel: "Confirmar perda" });
-    return answer ? answer as Opportunity["lossReason"] : undefined;
+    const options = LOSS_REASONS.map((reason, index) => `${index + 1}. ${reason}`).join("\n");
+    const answer = window.prompt(`Informe o motivo da perda:\n${options}`);
+    if (!answer) return undefined;
+    const selectedByNumber = LOSS_REASONS[Number(answer.trim()) - 1];
+    if (selectedByNumber) return selectedByNumber;
+    const selectedByText = LOSS_REASONS.find((reason) => reason.toLowerCase() === answer.trim().toLowerCase());
+    return selectedByText ?? "outro";
   }
 
   if (isLoading) {
@@ -264,16 +250,15 @@ function App() {
         onAdd={openCreate}
         onExport={() => {
           if (currentUser?.role === "admin" || currentUser?.role === "manager") {
-            setIsExporting(true);
             void exportOpportunitiesWorkbook({
-              opportunities: boardOpportunities,
+              opportunities: visibleOpportunities,
               businessUnit: selectedBusinessUnit,
               selectedMonth,
               generatedBy: currentUser.name,
               currency: selectedCurrency,
-            }).then(() => notify("Planilha gerada com os resultados filtrados.")).catch(() => {
-              notify("Não foi possível gerar a planilha. Tente novamente.", "error");
-            }).finally(() => setIsExporting(false));
+            }).catch(() => {
+              window.alert("Não foi possível gerar a planilha. Tente novamente.");
+            });
           }
         }}
         storageMode={isSupabaseConfigured ? "cloud" : "local"}
@@ -283,14 +268,12 @@ function App() {
         onCurrencyChange={setSelectedCurrency}
         onBusinessUnitChange={handleBusinessUnitChange}
         onSignOut={handleSignOut}
-        isExporting={isExporting}
       />
       <DashboardMetrics
-        opportunities={boardOpportunities}
+        opportunities={visibleOpportunities}
         currency={selectedCurrency}
         selectedMonth={selectedMonth}
         onMonthChange={setSelectedMonth}
-        onQuickFilter={setQuickFilter}
       />
       <FiltersBar
         filters={filters}
@@ -298,18 +281,11 @@ function App() {
         optionLists={optionLists}
         currentUser={currentUser!}
         selectedBusinessUnit={selectedBusinessUnit}
-        opportunities={visibleOpportunities.filter((item) => !item.stage.startsWith("Fechado") || item.closedAt?.startsWith(selectedMonth))}
-        quickFilter={quickFilter}
-        onQuickFilter={setQuickFilter}
-        sortOrder={sortOrder}
-        onSortChange={setSortOrder}
       />
       <FunnelBoard
-        key={JSON.stringify([selectedBusinessUnit, selectedMonth, selectedCurrency, filters, quickFilter, sortOrder])}
+        key={JSON.stringify([selectedBusinessUnit, selectedMonth, selectedCurrency, filters])}
         opportunities={boardOpportunities}
         selectedStage={filters.stage}
-        pageSize={pageSize}
-        onPageSizeChange={(size) => { setPageSize(size); savePageSize(size); }}
           onOpen={(opportunity) => {
             setSelected(opportunity);
             setModalMode("view");
@@ -317,7 +293,8 @@ function App() {
         onMove={handleMove}
       />
       <footer className="mx-auto max-w-[1800px] px-4 pb-8 text-xs text-slate-500 sm:px-6">
-        Atlantic Ocean Services · Gestão comercial
+        Integração pronta: configure as variáveis do Supabase em <code>.env</code> para colaboração na nuvem. A exportação de planilha
+        fica restrito a administradores e gestores.
         <span className="mt-2 block font-semibold text-slate-400">
           Desenvolvido por Paulo Penna - Atlantic Ocean Services 2026
         </span>
