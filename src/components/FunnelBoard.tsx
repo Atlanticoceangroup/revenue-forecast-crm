@@ -28,6 +28,7 @@ export function FunnelBoard({ opportunities, selectedStage, onOpen, onMove }: Fu
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-slate-950">{selectedStage || "Todas as oportunidades"}</h2>
+          <p className="mt-1 text-xs text-slate-500">Todas as moedas · valores na moeda de cada cotação</p>
           <p className="mt-1 text-sm text-slate-500" aria-live="polite">
             {opportunities.length} oportunidades{totals ? ` · ${totals}` : ""} nos resultados
             {missingFeeCount > 0 ? ` · ${missingFeeCount} sem fee informado` : ""}

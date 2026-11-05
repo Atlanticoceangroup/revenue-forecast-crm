@@ -24,8 +24,7 @@ import {
 } from "./services/opportunityRepository";
 import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, Filters, FunnelStage, OfficialSalesSegment, Opportunity, OptionLists } from "./types";
 import { todayIso } from "./utils/metrics";
-import { opportunityCurrency } from "./utils/money";
-import type { Currency } from "./types";
+import { visibleOpportunitiesForUser } from "./utils/opportunityVisibility";
 
 function App() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -39,7 +38,6 @@ function App() {
   });
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selectedBusinessUnit, setSelectedBusinessUnit] = useState<BusinessUnit>(DEFAULT_BUSINESS_UNIT);
-  const [selectedCurrency, setSelectedCurrency] = useState<Currency>("BRL");
   const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [isLoading, setIsLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>({ seller: "", stage: "", segment: "", service: "", search: "" });
@@ -65,16 +63,10 @@ function App() {
     }
   }, [isLoading, opportunities]);
 
-  const visibleOpportunities = useMemo(() => {
-    if (!currentUser) return [];
-    return opportunities.filter((opportunity) => {
-      const matchesBusinessUnit = opportunity.businessUnit === selectedBusinessUnit;
-      const canAccessBusinessUnit = currentUser.allowedBusinessUnits.includes(opportunity.businessUnit);
-      const canAccessSeller =
-        currentUser.role === "manager" || currentUser.role === "admin" || opportunity.seller === currentUser.sellerName;
-      return matchesBusinessUnit && canAccessBusinessUnit && canAccessSeller && opportunityCurrency(opportunity) === selectedCurrency;
-    });
-  }, [currentUser, opportunities, selectedBusinessUnit, selectedCurrency]);
+  const visibleOpportunities = useMemo(
+    () => visibleOpportunitiesForUser(opportunities, currentUser, selectedBusinessUnit),
+    [currentUser, opportunities, selectedBusinessUnit],
+  );
 
   const filteredOpportunities = useMemo(() => {
     const search = filters.search.trim().toLowerCase();
@@ -138,7 +130,6 @@ function App() {
     setOpportunities([]);
     setSelected(null);
     setSelectedBusinessUnit(DEFAULT_BUSINESS_UNIT);
-    setSelectedCurrency("BRL");
   }
 
   function handleBusinessUnitChange(businessUnit: BusinessUnit) {
@@ -202,7 +193,6 @@ function App() {
         : [savedOpportunity, ...current];
     });
     setSelected(isCreating ? null : savedOpportunity);
-    setSelectedCurrency(opportunityCurrency(savedOpportunity));
     setModalMode("view");
   }
 
@@ -255,7 +245,6 @@ function App() {
               businessUnit: selectedBusinessUnit,
               selectedMonth,
               generatedBy: currentUser.name,
-              currency: selectedCurrency,
             }).catch(() => {
               window.alert("Não foi possível gerar a planilha. Tente novamente.");
             });
@@ -264,14 +253,11 @@ function App() {
         storageMode={isSupabaseConfigured ? "cloud" : "local"}
         currentUser={currentUser!}
         selectedBusinessUnit={selectedBusinessUnit}
-        selectedCurrency={selectedCurrency}
-        onCurrencyChange={setSelectedCurrency}
         onBusinessUnitChange={handleBusinessUnitChange}
         onSignOut={handleSignOut}
       />
       <DashboardMetrics
         opportunities={visibleOpportunities}
-        currency={selectedCurrency}
         selectedMonth={selectedMonth}
         onMonthChange={setSelectedMonth}
       />
@@ -283,7 +269,7 @@ function App() {
         selectedBusinessUnit={selectedBusinessUnit}
       />
       <FunnelBoard
-        key={JSON.stringify([selectedBusinessUnit, selectedMonth, selectedCurrency, filters])}
+        key={JSON.stringify([selectedBusinessUnit, selectedMonth, filters])}
         opportunities={boardOpportunities}
         selectedStage={filters.stage}
           onOpen={(opportunity) => {
@@ -317,7 +303,6 @@ function App() {
           currentUser={currentUser!}
           selectedBusinessUnit={selectedBusinessUnit}
           canEdit={selected ? canEditOpportunity(selected) : true}
-          defaultCurrency={selectedCurrency}
         />
       )}
     </div>

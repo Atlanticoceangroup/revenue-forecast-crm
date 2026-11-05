@@ -10,14 +10,20 @@ const result = await build({
     contents: `
       export * from './src/utils/money';
       export * from './src/utils/metrics';
+      export * from './src/utils/dashboardMetrics';
+      export * from './src/utils/opportunityVisibility';
       export { buildOpportunitiesWorkbook } from './src/utils/exportWorkbook';
       export { upsertOpportunity, loadOpportunities } from './src/services/opportunityRepository';
       import React from 'react';
       import { renderToStaticMarkup } from 'react-dom/server';
       import { AddOpportunityForm } from './src/components/AddOpportunityForm';
       import { OpportunityCard } from './src/components/OpportunityCard';
+      import { FunnelBoard } from './src/components/FunnelBoard';
+      import { DashboardMetrics } from './src/components/DashboardMetrics';
       export const renderForm = (props) => renderToStaticMarkup(React.createElement(AddOpportunityForm, props));
       export const renderCard = (props) => renderToStaticMarkup(React.createElement(OpportunityCard, props));
+      export const renderBoard = (props) => renderToStaticMarkup(React.createElement(FunnelBoard, props));
+      export const renderDashboard = (props) => renderToStaticMarkup(React.createElement(DashboardMetrics, props));
     `,
     loader: "tsx",
     resolveDir: process.cwd(),
@@ -135,7 +141,106 @@ test("Excel preserva bruto, fee, moeda, avisos e totais reconciliados", async ()
     assert.ok(strFromU8(output["xl/worksheets/sheet1.xml"]).includes("Receita parcial"));
     assert.equal(xmlCell(strFromU8(output["xl/worksheets/sheet2.xml"]), "X2"), "");
   }
-  await assert.rejects(api.buildOpportunitiesWorkbook({ opportunities: [quotation, { ...quotation, currency: "USD" }], businessUnit: "freight_projects", selectedMonth: "2026-11", generatedBy: "Teste" }), /única moeda/);
   const empty = await api.buildOpportunitiesWorkbook({ opportunities: [], currency: "EUR", businessUnit: "freight_projects", selectedMonth: "2026-11", generatedBy: "Teste" });
   assert.ok(strFromU8(unzipSync(empty)["xl/styles.xml"]).includes("EUR"));
+});
+
+test("lista reúne BRL, USD e EUR preservando restrições de vendedor e base", () => {
+  const user = { role: "manager", sellerName: "Erik", allowedBusinessUnits: ["freight_projects"] };
+  const records = [quotation,
+    { ...quotation, id: "usd", clientName: "Cliente USD", currency: "USD", seller: "Outro", fee: 200 },
+    { ...quotation, id: "eur", clientName: "Cliente EUR", currency: "EUR", fee: 300 },
+    { ...quotation, id: "legacy", clientName: "Cliente legado", currency: undefined },
+    { ...quotation, id: "other-base", businessUnit: "maritime_port" },
+  ];
+  const visible = api.visibleOpportunitiesForUser(records, user, "freight_projects");
+  assert.deepEqual(visible.map((item) => item.id), ["quote-1", "usd", "eur", "legacy"]);
+  const board = api.renderBoard({ opportunities: visible, selectedStage: "", onOpen: () => {}, onMove: async () => {} });
+  for (const label of ["Cliente USD", "Cliente EUR", "Cliente legado", "BRL", "USD", "EUR", "4 oportunidades"]) assert.ok(board.includes(label), label);
+  assert.deepEqual(api.visibleOpportunitiesForUser(records, { ...user, role: "seller" }, "freight_projects").map((item) => item.id), ["quote-1", "eur", "legacy"]);
+  assert.deepEqual(api.visibleOpportunitiesForUser(records, user, "maritime_port"), []);
+  assert.deepEqual(api.visibleOpportunitiesForUser(records, null, "freight_projects"), []);
+  const html = api.renderDashboard({ opportunities: visible, selectedMonth: "2026-11", onMonthChange: () => {} });
+  const cards = [...html.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/g)].map((match) => match[1]);
+  const total = cards.find((card) => card.includes("Total de oportunidades"));
+  const openFee = cards.find((card) => card.includes("Fee em aberto"));
+  const forecast = cards.find((card) => card.includes("Forecast do fee"));
+  assert.ok(!html.includes("Moeda dos indicadores"));
+  assert.ok(!html.includes("<select"));
+  assert.ok(total.includes(">4</strong>"));
+  assert.ok(total.includes("Todas as moedas"));
+  for (const [currency, fee, weighted] of [["BRL", "380,00", "190,00"], ["USD", "200,00", "100,00"], ["EUR", "300,00", "150,00"]]) {
+    assert.ok(openFee.includes(fee));
+    assert.ok(openFee.includes(currency));
+    assert.ok(forecast.includes(weighted));
+    assert.ok(forecast.includes(currency));
+  }
+});
+
+test("indicadores e gestão mensal contam todas as moedas sem misturar receitas nos rankings", () => {
+  const records = [quotation,
+    { ...quotation, id: "usd", currency: "USD", seller: "Outro", fee: 200, stage: "Negociação", stageHistory: { "Proposta Enviada": "2026-11-01", "Negociação": "2026-11-02" } },
+    { ...quotation, id: "eur", currency: "EUR", fee: 0, nextActionDate: undefined },
+    { ...quotation, id: "pending", currency: "EUR", fee: null },
+    { ...quotation, id: "won-brl", fee: 100, stage: "Fechado - Ganhou", closedAt: "2026-11-03", stageHistory: { "Proposta Enviada": "2026-11-01", "Negociação": "2026-11-02" } },
+    { ...quotation, id: "won-usd", currency: "USD", seller: "Outro", fee: 200, stage: "Fechado - Ganhou", closedAt: "2026-11-04" },
+    { ...quotation, id: "lost-eur", currency: "EUR", fee: 50, stage: "Fechado - Perdido", closedAt: "2026-11-05", lossReason: "preço" },
+    { ...quotation, id: "old-won-eur", currency: "EUR", seller: "Outro", fee: 800, enteredAt: "2026-10-01", stage: "Fechado - Ganhou", closedAt: "2026-10-02" },
+  ];
+  const metrics = api.calculateDashboardMetrics(records, "2026-11");
+  assert.equal(metrics.totalOpportunities, 8);
+  assert.equal(metrics.stageCounts["Proposta Enviada"], 3);
+  assert.equal(metrics.stageConversionRates["Proposta Enviada"], 1);
+  assert.equal(metrics.overallConversionRate, 3 / 8);
+  assert.equal(metrics.winRate, 3 / 4);
+  assert.equal(metrics.lossRate, 1 / 4);
+  assert.equal(metrics.avgConversionDays, 2.5);
+  assert.equal(metrics.withoutNextAction, 1);
+  assert.equal(metrics.missingFeeCount, 1);
+  assert.deepEqual(metrics.wonRanking, [{ seller: "Outro", count: 2 }, { seller: "Erik", count: 1 }]);
+  assert.equal(metrics.monthly.wonCount, 2);
+  assert.equal(metrics.monthly.lostCount, 1);
+  assert.equal(metrics.monthly.winRate, 2 / 3);
+  assert.deepEqual(metrics.monthly.lossReasonRanking, [{ reason: "preço", count: 1 }]);
+  assert.deepEqual(metrics.monthly.sellerRanking, [{ seller: "Erik", count: 1 }, { seller: "Outro", count: 1 }]);
+  assert.equal(metrics.monthly.pipelineCounts["Proposta Enviada"], 3);
+  assert.equal(metrics.monthly.pipelineCounts["Negociação"], 1);
+  assert.deepEqual(metrics.byCurrency.map((group) => [group.currency, group.metrics.openRevenue, group.metrics.wonRevenue, group.metrics.avgTicket, group.monthly.wonRevenue]), [
+    ["BRL", 190, 100, 100, 100], ["USD", 200, 200, 200, 200], ["EUR", 0, 800, 800, 0],
+  ]);
+  const html = api.renderDashboard({ opportunities: records, selectedMonth: "2026-11", onMonthChange: () => {} });
+  assert.ok(html.includes("1 oportunidades sem fee informado"));
+  for (const currency of ["BRL", "USD", "EUR"]) assert.ok(html.includes(`Fee em negociação · ${currency}`));
+  const empty = api.calculateDashboardMetrics([], "2026-11");
+  assert.equal(empty.winRate, 0);
+  assert.equal(empty.avgConversionDays, 0);
+  assert.equal(empty.monthly.winRate, 0);
+  assert.deepEqual(empty.wonRanking, []);
+  assert.doesNotThrow(() => api.renderDashboard({ opportunities: [], selectedMonth: "2026-11", onMonthChange: () => {} }));
+});
+
+test("Excel exporta todas as moedas juntas e mantém totais financeiros separados", async () => {
+  const records = [quotation, { ...quotation, id: "usd", currency: "USD", fee: 240, value: 500 },
+    { ...quotation, id: "eur", currency: "EUR", fee: null, value: 900 },
+    { ...quotation, id: "eur-zero", currency: "EUR", fee: 0, value: 100 }];
+  const files = unzipSync(await api.buildOpportunitiesWorkbook({ opportunities: records, currency: "BRL", businessUnit: "freight_projects", selectedMonth: "2026-11", generatedBy: "Teste" }));
+  const workbook = strFromU8(files["xl/workbook.xml"]);
+  const names = [...workbook.matchAll(/<sheet name="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(names, ["Oportunidades", "Resumo BRL", "Vendedores BRL", "Resumo USD", "Vendedores USD", "Resumo EUR", "Vendedores EUR"]);
+  const detail = strFromU8(files["xl/worksheets/sheet1.xml"]);
+  for (const [reference, expected] of [["W2", "BRL"], ["W3", "USD"], ["W4", "EUR"], ["X2", "190"], ["X3", "240"], ["Y4", "Não"], ["X5", "0"]]) assert.ok(xmlCell(detail, reference).includes(expected), reference);
+  assert.equal(xmlCell(detail, "X4"), "");
+  for (const [sheet, currency, fee, forecast, gross] of [[2, "BRL", 190, 95, 2349], [4, "USD", 240, 120, 500], [6, "EUR", 0, 0, 1000]]) {
+    const summary = strFromU8(files[`xl/worksheets/sheet${sheet}.xml`]);
+    assert.ok(summary.includes(`Moeda: ${currency}`));
+    assert.equal(xmlCell(summary, "B6"), `<v>${fee}</v>`);
+    assert.equal(xmlCell(summary, "D6"), `<v>${forecast}</v>`);
+    const total = summary.match(/<row r="(\d+)">[\s\S]*?<\/row>/g).at(-1);
+    const rowNumber = total.match(/r="(\d+)"/)[1];
+    assert.equal(xmlCell(summary, `C${rowNumber}`), `<v>${gross}</v>`);
+    assert.equal(xmlCell(summary, `D${rowNumber}`), `<v>${fee}</v>`);
+  }
+  const styles = strFromU8(files["xl/styles.xml"]);
+  assert.ok(styles.includes('formatCode="#,##0.00"'));
+  assert.ok(!styles.includes("&quot;BRL&quot;"));
 });
