@@ -1,5 +1,6 @@
-import { COMMERCIAL_GOAL, FUNNEL_STAGES, OPEN_STAGES } from "../constants";
-import type { FunnelStage, Opportunity } from "../types";
+import { FUNNEL_STAGES, OPEN_STAGES } from "../constants";
+import type { Currency, FunnelStage, Opportunity } from "../types";
+import { opportunityCurrency, opportunityFee } from "./money";
 
 export const BRL = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -37,19 +38,21 @@ export function stageConversion(opportunities: Opportunity[], stage: FunnelStage
   return entered ? advanced / entered : 0;
 }
 
-export function calculateMetrics(opportunities: Opportunity[]) {
+export function calculateMetrics(allOpportunities: Opportunity[], currency: Currency = "BRL") {
+  const opportunities = allOpportunities.filter((opportunity) => opportunityCurrency(opportunity) === currency);
   const open = opportunities.filter(isOpenOpportunity);
   const won = opportunities.filter((opportunity) => opportunity.stage === "Fechado - Ganhou");
   const lost = opportunities.filter((opportunity) => opportunity.stage === "Fechado - Perdido");
   const closed = [...won, ...lost];
-  const openRevenue = open.reduce((sum, opportunity) => sum + opportunity.value, 0);
-  const wonRevenue = won.reduce((sum, opportunity) => sum + opportunity.value, 0);
-  const lostRevenue = lost.reduce((sum, opportunity) => sum + opportunity.value, 0);
+  const openRevenue = sumFees(open);
+  const wonRevenue = sumFees(won);
+  const lostRevenue = sumFees(lost);
   const weightedForecast = open.reduce(
-    (sum, opportunity) => sum + opportunity.value * (opportunity.probability / 100),
+    (sum, opportunity) => sum + (opportunityFee(opportunity) ?? 0) * (opportunity.probability / 100),
     0,
   );
-  const avgTicket = won.length ? wonRevenue / won.length : 0;
+  const wonWithFee = won.filter((opportunity) => opportunityFee(opportunity) !== null);
+  const avgTicket = wonWithFee.length ? wonRevenue / wonWithFee.length : 0;
   const avgConversionDays = closed.length
     ? closed.reduce((sum, opportunity) => sum + daysBetween(opportunity.enteredAt, opportunity.closedAt ?? todayIso()), 0) /
       closed.length
@@ -87,11 +90,13 @@ export function calculateMetrics(opportunities: Opportunity[]) {
   const stalledOverSeven = open.filter((opportunity) => stalledDays(opportunity) > 7).length;
   const negotiationRanking = rankBySeller(
     opportunities.filter((opportunity) => opportunity.stage === "Negociação"),
-    "value",
   );
   const wonRanking = rankWonBySeller(won);
 
   return {
+    currency,
+    missingFeeCount: opportunities.filter((opportunity) => opportunityFee(opportunity) === null).length,
+    grossValue: opportunities.reduce((total, opportunity) => total + opportunity.value, 0),
     openRevenue,
     wonRevenue,
     lostRevenue,
@@ -105,7 +110,6 @@ export function calculateMetrics(opportunities: Opportunity[]) {
     stageStallAverage,
     winRate,
     lossRate,
-    pipelineCoverage: openRevenue / COMMERCIAL_GOAL,
     withoutNextAction,
     stalledOverSeven,
     negotiationRanking,
@@ -113,7 +117,8 @@ export function calculateMetrics(opportunities: Opportunity[]) {
   };
 }
 
-export function calculateMonthlyMetrics(opportunities: Opportunity[], month: string) {
+export function calculateMonthlyMetrics(allOpportunities: Opportunity[], month: string, currency: Currency = "BRL") {
+  const opportunities = allOpportunities.filter((opportunity) => opportunityCurrency(opportunity) === currency);
   const closedInMonth = opportunities.filter((opportunity) => opportunity.closedAt?.startsWith(month));
   const wonInMonth = closedInMonth.filter((opportunity) => opportunity.stage === "Fechado - Ganhou");
   const lostInMonth = closedInMonth.filter((opportunity) => opportunity.stage === "Fechado - Perdido");
@@ -123,7 +128,7 @@ export function calculateMonthlyMetrics(opportunities: Opportunity[], month: str
       const stageOps = open.filter((opportunity) => opportunity.stage === stage);
       acc[stage] = {
         count: stageOps.length,
-        value: stageOps.reduce((sum, opportunity) => sum + opportunity.value, 0),
+        value: sumFees(stageOps),
       };
       return acc;
     },
@@ -139,8 +144,8 @@ export function calculateMonthlyMetrics(opportunities: Opportunity[], month: str
   return {
     wonCount: wonInMonth.length,
     lostCount: lostInMonth.length,
-    wonRevenue: wonInMonth.reduce((sum, opportunity) => sum + opportunity.value, 0),
-    lostRevenue: lostInMonth.reduce((sum, opportunity) => sum + opportunity.value, 0),
+    wonRevenue: sumFees(wonInMonth),
+    lostRevenue: sumFees(lostInMonth),
     winRate: closedInMonth.length ? wonInMonth.length / closedInMonth.length : 0,
     sellerRanking,
     pipelineByStage,
@@ -150,9 +155,10 @@ export function calculateMonthlyMetrics(opportunities: Opportunity[], month: str
   };
 }
 
-function rankBySeller(opportunities: Opportunity[], field: "value") {
+function rankBySeller(opportunities: Opportunity[]) {
   const totals = opportunities.reduce<Record<string, number>>((acc, opportunity) => {
-    acc[opportunity.seller] = (acc[opportunity.seller] || 0) + opportunity[field];
+    if (opportunityFee(opportunity) === null) return acc;
+    acc[opportunity.seller] = (acc[opportunity.seller] || 0) + opportunityFee(opportunity)!;
     return acc;
   }, {});
   return Object.entries(totals)
@@ -165,11 +171,15 @@ function rankWonBySeller(opportunities: Opportunity[]) {
   const totals = opportunities.reduce<Record<string, { count: number; value: number }>>((acc, opportunity) => {
     acc[opportunity.seller] ??= { count: 0, value: 0 };
     acc[opportunity.seller].count += 1;
-    acc[opportunity.seller].value += opportunity.value;
+    acc[opportunity.seller].value += opportunityFee(opportunity) ?? 0;
     return acc;
   }, {});
   return Object.entries(totals)
     .map(([seller, data]) => ({ seller, ...data }))
     .sort((a, b) => b.count - a.count || b.value - a.value)
     .slice(0, 5);
+}
+
+export function sumFees(opportunities: Opportunity[]) {
+  return Math.round(opportunities.reduce((total, opportunity) => total + (opportunityFee(opportunity) ?? 0), 0) * 100) / 100;
 }

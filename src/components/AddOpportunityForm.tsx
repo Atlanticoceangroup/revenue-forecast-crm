@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { BUSINESS_UNIT_SEGMENTS, BUSINESS_UNITS, FUNNEL_STAGES, LOSS_REASONS } from "../constants";
 import type { BusinessUnit, ClientDraft, ClientOption, CurrentUser, FunnelStage, LeadSource, LeadTemperature, LossReason, OfficialSalesSegment, Opportunity, OptionLists, PredictableRevenueLeadType, Priority, SalesSegment } from "../types";
 import { todayIso } from "../utils/metrics";
+import { CURRENCIES, formatMoney, moneyInput, opportunityCurrency, parseMoney, validateQuotation } from "../utils/money";
+import type { Currency } from "../types";
 
 interface AddOpportunityFormProps {
   initial?: Opportunity | null;
@@ -15,6 +17,7 @@ interface AddOpportunityFormProps {
   onDeleteOption: (type: keyof OptionLists, name: string, segment?: OfficialSalesSegment) => Promise<void>;
   currentUser: CurrentUser;
   selectedBusinessUnit: BusinessUnit;
+  defaultCurrency?: Currency;
 }
 
 const sources: LeadSource[] = ["outbound", "inbound", "indicação", "evento", "parceiro"];
@@ -32,6 +35,7 @@ export function AddOpportunityForm({
   onDeleteOption,
   currentUser,
   selectedBusinessUnit,
+  defaultCurrency = "BRL",
 }: AddOpportunityFormProps) {
   const selectedBusinessUnitLabel = BUSINESS_UNITS.find((unit) => unit.id === selectedBusinessUnit)?.label ?? selectedBusinessUnit;
   const availableSegments = BUSINESS_UNIT_SEGMENTS[selectedBusinessUnit];
@@ -41,6 +45,10 @@ export function AddOpportunityForm({
   const [opportunityId] = useState(() => initial?.id ?? `opp-${crypto.randomUUID()}`);
   const isSubmittingRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currency, setCurrency] = useState<Currency>(initial ? opportunityCurrency(initial) : defaultCurrency);
+  const [grossInput, setGrossInput] = useState(() => moneyInput(initial?.value));
+  const [feeInput, setFeeInput] = useState(() => moneyInput(initial?.fee));
+  const [financialError, setFinancialError] = useState("");
   const segmentServices = optionLists.servicesBySegment[selectedSegment] ?? [];
 
   useEffect(() => {
@@ -53,6 +61,17 @@ export function AddOpportunityForm({
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmittingRef.current) return;
+    let gross: number;
+    let fee: number | null;
+    try {
+      gross = parseMoney(grossInput) ?? 0;
+      fee = parseMoney(feeInput);
+      validateQuotation(gross, fee);
+      setFinancialError("");
+    } catch (error) {
+      setFinancialError(error instanceof Error ? error.message : "Confira os valores da cotação.");
+      return;
+    }
     const data = new FormData(event.currentTarget);
     const stage = data.get("stage") as FunnelStage;
     const enteredAt = String(data.get("enteredAt"));
@@ -82,7 +101,9 @@ export function AddOpportunityForm({
       segment: data.get("segment") as SalesSegment,
       service: String(data.get("service")),
       seller: String(data.get("seller")),
-      value: Number(data.get("value")),
+      value: gross,
+      fee,
+      currency,
       enteredAt,
       lastInteractionAt: String(data.get("lastInteractionAt")),
       nextStep,
@@ -155,7 +176,23 @@ export function AddOpportunityForm({
         ) : (
           <Field label="Vendedor" name="seller" value={currentUser.sellerName} readOnly />
         )}
-        <Field label="Valor estimado" name="value" type="number" defaultValue={initial?.value ?? 50000} required />
+        <fieldset className="rounded-lg border border-cyan-100 bg-cyan-50/40 p-4 sm:col-span-2" disabled={isSubmitting}>
+          <legend className="px-1 text-sm font-bold text-slate-800">Valores da cotação</legend>
+          <p className="mb-3 text-xs text-slate-600">Informe agora ou atualize depois. A receita da Atlantic é o fee. Bruto e fee usam a mesma moeda.</p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-bold text-slate-500">Moeda</span>
+              <select value={currency} onChange={(event) => setCurrency(event.target.value as Currency)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm focus-visible:outline-cyan-600">
+                {CURRENCIES.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
+              </select>
+            </label>
+            <Field label={`Valor bruto (${currency})`} name="value" inputMode="decimal" placeholder="2.349,00" value={grossInput} onChange={(event) => setGrossInput(event.target.value)} aria-describedby="quotation-values-help" />
+            <Field label={`Fee Atlantic (${currency})`} name="fee" inputMode="decimal" placeholder="190,00" value={feeInput} onChange={(event) => setFeeInput(event.target.value)} aria-describedby="quotation-values-help" />
+          </div>
+          <p id="quotation-values-help" className="mt-3 text-xs text-slate-600">Use vírgula para centavos. Fee em branco = não informado; 0,00 = fee zero confirmado. Trocar a moeda não converte os valores.</p>
+          <p className="mt-2 text-sm font-semibold text-cyan-800">Receita Atlantic: {feePreview(feeInput, currency)}</p>
+          {financialError && <p role="alert" className="mt-2 text-sm font-semibold text-red-700">{financialError}</p>}
+        </fieldset>
         <Field label="Entrada no funil" name="enteredAt" type="date" defaultValue={initial?.enteredAt ?? todayIso()} required />
         <Field label="Última interação" name="lastInteractionAt" type="date" defaultValue={initial?.lastInteractionAt ?? todayIso()} required />
         <Field label="Data da próxima ação" name="nextActionDate" type="date" defaultValue={initial?.nextActionDate ?? todayIso()} />
@@ -209,6 +246,15 @@ function Field({ label, ...props }: React.InputHTMLAttributes<HTMLInputElement> 
       />
     </label>
   );
+}
+
+function feePreview(input: string, currency: Currency) {
+  try {
+    const fee = parseMoney(input);
+    return fee === null ? "Não informado" : formatMoney(fee, currency);
+  } catch {
+    return "Confira o valor digitado";
+  }
 }
 
 function Select({ label, options, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; options: string[] }) {

@@ -1,6 +1,8 @@
 import { BarChart3, Download, LogOut, Plus } from "lucide-react";
 import { BUSINESS_UNITS } from "../constants";
 import type { BusinessUnit, CurrentUser } from "../types";
+import type { Currency } from "../types";
+import { CURRENCIES } from "../utils/money";
 
 interface HeaderProps {
   onAdd: () => void;
@@ -10,6 +12,8 @@ interface HeaderProps {
   selectedBusinessUnit: BusinessUnit;
   onBusinessUnitChange: (businessUnit: BusinessUnit) => void;
   onSignOut: () => void;
+  selectedCurrency: Currency;
+  onCurrencyChange: (currency: Currency) => void;
 }
 
 export function Header({
@@ -20,6 +24,8 @@ export function Header({
   selectedBusinessUnit,
   onBusinessUnitChange,
   onSignOut,
+  selectedCurrency,
+  onCurrencyChange,
 }: HeaderProps) {
   const availableBusinessUnits = BUSINESS_UNITS.filter((unit) => currentUser.allowedBusinessUnits.includes(unit.id));
   const selectedBusinessUnitLabel =
@@ -63,6 +69,12 @@ export function Header({
                   {unit.shortLabel}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600">
+            Moeda da visualização
+            <select value={selectedCurrency} onChange={(event) => onCurrencyChange(event.target.value as Currency)} className="min-h-7 bg-transparent text-sm font-semibold text-slate-800 focus-visible:outline-cyan-600">
+              {CURRENCIES.map((item) => <option key={item.code} value={item.code}>{item.code}</option>)}
             </select>
           </label>
           <button

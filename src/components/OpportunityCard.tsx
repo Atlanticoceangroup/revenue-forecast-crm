@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { ArrowUpRight, CalendarClock, UserRound } from "lucide-react";
 import { FUNNEL_STAGES, STAGE_COLORS } from "../constants";
 import type { FunnelStage, Opportunity } from "../types";
-import { BRL, stalledDays } from "../utils/metrics";
+import { stalledDays } from "../utils/metrics";
+import { formatMoney, opportunityCurrency, opportunityFee } from "../utils/money";
 
 interface OpportunityCardProps {
   opportunity: Opportunity;
@@ -15,6 +16,8 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
   const movingRef = useRef(false);
   const [moveError, setMoveError] = useState("");
   const isClosed = opportunity.stage.startsWith("Fechado");
+  const currency = opportunityCurrency(opportunity);
+  const fee = opportunityFee(opportunity);
   const stalled = stalledDays(opportunity);
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -56,8 +59,9 @@ export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCard
           <span className="mt-1 block truncate text-xs text-slate-500" title={`${opportunity.segment} · ${opportunity.service}`}>{opportunity.segment} · {opportunity.service}</span>
         </button>
         <div className="min-w-0">
-          <p className="text-xs text-slate-500">Valor estimado</p>
-          <p className="mt-1 break-words text-base font-bold text-slate-950">{BRL.format(opportunity.value)}</p>
+          <p className="text-xs text-slate-500">Fee Atlantic</p>
+          <p className="mt-1 break-words text-base font-bold text-slate-950">{fee === null ? "Não informado" : formatMoney(fee, currency)}</p>
+          <p className="mt-1 text-xs text-slate-600">Bruto: {formatMoney(opportunity.value, currency)}</p>
           <p className="mt-1 text-xs text-slate-500">Probabilidade: {opportunity.probability}%</p>
         </div>
         <div className="min-w-0">
