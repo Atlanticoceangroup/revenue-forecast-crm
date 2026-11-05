@@ -1,128 +1,110 @@
-import { CalendarClock, Flame, MoveRight, UserRound } from "lucide-react";
-import { BUSINESS_UNITS } from "../constants";
-import type { Opportunity } from "../types";
+import { useRef, useState } from "react";
+import { ArrowUpRight, CalendarClock, UserRound } from "lucide-react";
+import { FUNNEL_STAGES, STAGE_COLORS } from "../constants";
+import type { FunnelStage, Opportunity } from "../types";
 import { BRL, stalledDays } from "../utils/metrics";
 
 interface OpportunityCardProps {
   opportunity: Opportunity;
   onOpen: (opportunity: Opportunity) => void;
-  onDragStart: (id: string) => void;
+  onMove: (id: string, stage: FunnelStage) => Promise<void>;
 }
 
-export function OpportunityCard({ opportunity, onOpen, onDragStart }: OpportunityCardProps) {
+export function OpportunityCard({ opportunity, onOpen, onMove }: OpportunityCardProps) {
+  const [isMoving, setIsMoving] = useState(false);
+  const movingRef = useRef(false);
+  const [moveError, setMoveError] = useState("");
   const isClosed = opportunity.stage.startsWith("Fechado");
   const stalled = stalledDays(opportunity);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const isOverdue = !isClosed && Boolean(opportunity.nextActionDate && opportunity.nextActionDate < today);
   const isCritical = !isClosed && stalled > 14;
-  const isWarning = !isClosed && stalled > 7 && stalled <= 14;
+  const isStalled = !isClosed && stalled > 7;
+  const needsAttention = isOverdue || isStalled || (!isClosed && !opportunity.nextActionDate);
+
+  async function handleStageChange(stage: FunnelStage) {
+    if (movingRef.current || stage === opportunity.stage) return;
+    movingRef.current = true;
+    setIsMoving(true);
+    setMoveError("");
+    try {
+      await onMove(opportunity.id, stage);
+    } catch {
+      setMoveError("Não foi possível confirmar a mudança de etapa. Recarregue os dados antes de tentar novamente.");
+    } finally {
+      movingRef.current = false;
+      setIsMoving(false);
+    }
+  }
 
   return (
     <article
-      draggable={!isClosed}
-      onDragStart={() => {
-        if (!isClosed) onDragStart(opportunity.id);
-      }}
-      onClick={() => onOpen(opportunity)}
-      className={`${isClosed ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"} rounded-lg border bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-soft ${
-        isCritical ? "border-red-300 ring-2 ring-red-100" : isWarning ? "border-orange-300 ring-2 ring-orange-100" : "border-slate-200"
-      }`}
+      aria-label={`${opportunity.clientName}: ${opportunity.opportunityName}`}
+      aria-busy={isMoving}
+      className={`rounded-xl border bg-white shadow-sm transition-shadow hover:shadow-md ${needsAttention ? "border-amber-300" : "border-slate-200"}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-bold text-slate-950">{opportunity.clientName}</p>
-          <p className="mt-1 text-xs font-medium text-slate-500">{opportunity.opportunityName}</p>
+      <div className="grid min-w-0 grid-cols-2 items-start gap-4 p-4 md:grid-cols-3 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.2fr)_auto] xl:items-center">
+        <button
+          type="button"
+          onClick={() => onOpen(opportunity)}
+          className="col-span-2 min-w-0 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-600 md:col-span-1"
+          aria-label={`Abrir ${opportunity.opportunityName}, cliente ${opportunity.clientName}`}
+        >
+          <span className="block truncate text-sm font-bold text-slate-950" title={opportunity.clientName}>{opportunity.clientName}</span>
+          <span className="mt-1 block truncate text-sm text-slate-600" title={opportunity.opportunityName}>{opportunity.opportunityName}</span>
+          <span className="mt-1 block truncate text-xs text-slate-500" title={`${opportunity.segment} · ${opportunity.service}`}>{opportunity.segment} · {opportunity.service}</span>
+        </button>
+        <div className="min-w-0">
+          <p className="text-xs text-slate-500">Valor estimado</p>
+          <p className="mt-1 break-words text-base font-bold text-slate-950">{BRL.format(opportunity.value)}</p>
+          <p className="mt-1 text-xs text-slate-500">Probabilidade: {opportunity.probability}%</p>
         </div>
-        <span className={priorityClass(opportunity.priority)}>{opportunity.priority}</span>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <strong className="text-base text-slate-950">{BRL.format(opportunity.value)}</strong>
-        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
-          {opportunity.probability}%
-        </span>
-      </div>
-      <div className="mt-3 space-y-2 text-xs text-slate-500">
-        <p className="rounded-md bg-slate-50 px-2 py-1 font-semibold text-slate-600">
-          {opportunity.segment} · {opportunity.service}
-        </p>
-        <p className="rounded-md bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">
-          {businessUnitShortLabel(opportunity.businessUnit)}
-        </p>
-        <p className="flex items-center gap-2">
-          <UserRound size={14} />
-          {opportunity.seller} · {opportunity.source} · {opportunity.leadType}
-        </p>
-        {!isClosed ? (
-          <p className="flex items-center gap-2">
-            <CalendarClock size={14} />
-            Última interação há {stalled} dias
-          </p>
-        ) : null}
-        {!isClosed && opportunity.nextActionDate ? (
-          <p className={`flex items-center gap-2 ${isNextActionOverdue(opportunity.nextActionDate) ? "font-bold text-red-600" : ""}`}>
-            <CalendarClock size={14} />
-            Próxima ação: {formatDate(opportunity.nextActionDate)}
-          </p>
-        ) : null}
-        {isClosed && opportunity.closedAt ? (
-          <p className="flex items-center gap-2 font-semibold text-slate-600">
-            <CalendarClock size={14} />
-            Fechado em {formatDate(opportunity.closedAt)}
-          </p>
-        ) : null}
-        {!isClosed ? (
-          <p className="flex items-center gap-2 text-slate-700">
-            <MoveRight size={14} />
-            {opportunity.nextStep}
-          </p>
-        ) : null}
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <span className={temperatureClass(opportunity.temperature)}>
-          <Flame size={13} />
-          {opportunity.temperature}
-        </span>
-        {(isCritical || isWarning) && (
-          <span className={`text-xs font-bold ${isCritical ? "text-red-600" : "text-orange-600"}`}>
-            parado
+        <div className="min-w-0">
+          <p className="flex items-center gap-1 text-xs text-slate-500"><UserRound size={13} aria-hidden="true" /> Responsável</p>
+          <p className="mt-1 truncate text-sm font-semibold text-slate-700" title={opportunity.seller}>{opportunity.seller}</p>
+          <p className="mt-1 text-xs text-slate-500">Prioridade {opportunity.priority}</p>
+        </div>
+        <label className="block min-w-0">
+          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${STAGE_COLORS[opportunity.stage]}`} />
+            {isMoving ? "Salvando etapa..." : "Etapa"}
           </span>
-        )}
-        {opportunity.lossReason ? (
-          <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-bold text-red-700">
-            {opportunity.lossReason}
-          </span>
-        ) : null}
+          <select
+            aria-label={`Etapa de ${opportunity.opportunityName}`}
+            value={opportunity.stage}
+            disabled={isClosed || isMoving}
+            onChange={(event) => void handleStageChange(event.target.value as FunnelStage)}
+            className="min-h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-700 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {FUNNEL_STAGES.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+          </select>
+        </label>
+        <div className="min-w-0">
+          <p className="flex items-center gap-1 text-xs text-slate-500"><CalendarClock size={13} aria-hidden="true" /> {isClosed ? "Fechamento" : "Próxima ação"}</p>
+          <p className={`mt-1 text-sm font-semibold ${needsAttention ? "text-amber-800" : "text-slate-700"}`}>
+            {isClosed ? formatDate(opportunity.closedAt) : formatDate(opportunity.nextActionDate)}
+            {isOverdue ? " · atrasada" : ""}
+          </p>
+          <p className="mt-1 truncate text-xs text-slate-500" title={isClosed ? opportunity.lossReason : opportunity.nextStep}>
+            {isClosed ? opportunity.lossReason || "Oportunidade encerrada" : opportunity.nextStep}
+          </p>
+          {isStalled && <p className={`mt-1 text-xs font-semibold ${isCritical ? "text-red-700" : "text-amber-800"}`}>{stalled} dias sem interação</p>}
+        </div>
+        <button
+          type="button"
+          onClick={() => onOpen(opportunity)}
+          aria-label={`Ver detalhes de ${opportunity.opportunityName}`}
+          className="flex min-h-10 items-center justify-center gap-1 self-center rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:border-cyan-300 hover:bg-cyan-50 focus-visible:outline-cyan-600"
+        >
+          Detalhes <ArrowUpRight size={15} aria-hidden="true" />
+        </button>
       </div>
+      {moveError && <p role="alert" className="border-t border-red-100 px-4 py-3 text-sm text-red-700">{moveError}</p>}
     </article>
   );
 }
 
-function isNextActionOverdue(value: string) {
-  return value < new Date().toISOString().slice(0, 10);
-}
-
-function formatDate(value: string) {
-  return new Date(`${value}T00:00:00`).toLocaleDateString("pt-BR");
-}
-
-function businessUnitShortLabel(value: Opportunity["businessUnit"]) {
-  return BUSINESS_UNITS.find((unit) => unit.id === value)?.shortLabel ?? value;
-}
-
-function priorityClass(priority: Opportunity["priority"]) {
-  const base = "rounded-full px-2 py-1 text-[11px] font-bold uppercase tracking-normal";
-  const classes = {
-    baixa: "bg-slate-100 text-slate-600",
-    média: "bg-amber-100 text-amber-700",
-    alta: "bg-red-100 text-red-700",
-  };
-  return `${base} ${classes[priority]}`;
-}
-
-function temperatureClass(temperature: Opportunity["temperature"]) {
-  const base = "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold";
-  const classes = {
-    frio: "bg-blue-50 text-blue-700",
-    morno: "bg-orange-50 text-orange-700",
-    quente: "bg-red-50 text-red-700",
-  };
-  return `${base} ${classes[temperature]}`;
+function formatDate(value?: string) {
+  return value ? new Date(`${value}T00:00:00`).toLocaleDateString("pt-BR") : "Sem data";
 }
