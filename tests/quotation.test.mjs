@@ -16,7 +16,8 @@ const result = await build({
       import { renderToStaticMarkup } from 'react-dom/server';
       import { AddOpportunityForm } from './src/components/AddOpportunityForm';
       import { OpportunityCard } from './src/components/OpportunityCard';
-      export const renderForm = (props) => renderToStaticMarkup(React.createElement(AddOpportunityForm, props));
+      import { FeedbackProvider } from './src/components/ui/Feedback';
+      export const renderForm = (props) => renderToStaticMarkup(React.createElement(FeedbackProvider, null, React.createElement(AddOpportunityForm, props)));
       export const renderCard = (props) => renderToStaticMarkup(React.createElement(OpportunityCard, props));
     `,
     loader: "tsx",

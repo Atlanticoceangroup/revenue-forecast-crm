@@ -1,4 +1,4 @@
-import { LogIn } from "lucide-react";
+import { Eye, EyeOff, LogIn } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
@@ -11,6 +11,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -39,6 +40,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">E-mail</span>
           <input
             type="email"
+            autoComplete="username"
+            autoCapitalize="none"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             className="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-500 focus:bg-white"
@@ -47,15 +50,19 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         </label>
         <label className="mt-3 block">
           <span className="mb-1 block text-xs font-bold uppercase tracking-normal text-slate-500">Senha</span>
+          <span className="relative block">
           <input
-            type="password"
+            type={showPassword ? "text" : "password"}
+            autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            className="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-500 focus:bg-white"
+            className="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 pl-3 pr-12 text-sm outline-none focus:border-slate-500 focus:bg-white"
             required
           />
+          <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)} className="absolute right-1 top-1 rounded p-2 text-slate-600">{showPassword ? <EyeOff size={19} aria-hidden="true" /> : <Eye size={19} aria-hidden="true" />}</button>
+          </span>
         </label>
-        {error ? <p className="mt-3 text-sm font-semibold text-red-600">{error}</p> : null}
+        {error ? <p role="alert" className="mt-3 text-sm font-semibold text-red-600">{error}</p> : null}
         <button
           type="submit"
           disabled={isSubmitting}
